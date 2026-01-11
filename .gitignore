@@ -1,0 +1,28 @@
+# Data files (contain personal information)
+*.xlsx
+*.xls
+*.csv
+
+# Log files
+load_log.txt
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
