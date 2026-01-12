@@ -915,11 +915,6 @@ def main():
     # Store load time for display
     st.session_state.last_load_time = load_time
 
-    # Debug: show load log in expander
-    with st.expander("Debug: Data Load Log", expanded=False):
-        for log_entry in roster_manager.load_log:
-            st.text(log_entry)
-
     analyzer = BoatAnalyzer(roster_manager)
 
     # Store data source for display
