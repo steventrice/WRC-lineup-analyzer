@@ -486,24 +486,6 @@ class RosterManager:
 
         self.log(f"Loaded {signups_loaded} regatta signups")
 
-        # Debug: show signups for Steven Rice
-        if "Steven Rice" in self.rowers:
-            sr = self.rowers["Steven Rice"]
-            self.log(f"DEBUG Steven Rice signups:")
-            for reg, attending in sr.regatta_signups.items():
-                if attending:
-                    self.log(f"  - {reg}: YES")
-
-        # Debug: show raw values for Steven Rice in Charles columns
-        for _, row in df.iterrows():
-            name = str(row.get(name_col, '')).strip()
-            if name == "Steven Rice":
-                self.log(f"DEBUG Steven Rice raw column values:")
-                for col in df.columns:
-                    if 'charles' in str(col).lower():
-                        val = row.get(col, '')
-                        self.log(f"  Column '{col}': '{val}'")
-
     def _load_score_sheets(self, xl: pd.ExcelFile):
         """Load scores from score sheets (1K, 5K, etc.)"""
         score_sheets = []
