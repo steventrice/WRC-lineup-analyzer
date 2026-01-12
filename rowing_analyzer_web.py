@@ -1242,21 +1242,16 @@ def get_auth_token():
     return hashlib.sha256(f"wrc_lineup_{password}".encode()).hexdigest()[:32]
 
 
-@st.cache_resource
-def get_cookie_manager():
-    """Get a cached cookie manager instance."""
-    if COOKIES_AVAILABLE:
-        try:
-            return stx.CookieManager(key="wrc_cookies")
-        except Exception:
-            return None
-    return None
-
-
 def check_password():
     """Returns True if the user has the correct password."""
 
-    cookie_manager = get_cookie_manager()
+    # Initialize cookie manager (can't be cached - uses widgets internally)
+    cookie_manager = None
+    if COOKIES_AVAILABLE:
+        try:
+            cookie_manager = stx.CookieManager(key="wrc_cookies")
+        except Exception:
+            pass
 
     # Check for existing auth cookie
     if cookie_manager and "password_correct" not in st.session_state:
