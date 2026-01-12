@@ -822,12 +822,14 @@ def _load_data_impl():
 @st.cache_resource(ttl=300)  # Cache for 5 minutes, then refresh from Google Sheets
 def load_data(cache_version: int = 0):
     """Cached wrapper - pass different cache_version to force refresh"""
+    import datetime
     result = _load_data_impl()
+    load_time = datetime.datetime.now().strftime("%H:%M:%S")
     if result[0] is None:
         # Don't cache failures - clear and return
         st.cache_resource.clear()
-        return result
-    return result
+        return result[0], result[1], result[2], load_time
+    return result[0], result[1], result[2], load_time
 
 
 def get_seat_labels(num_seats: int) -> List[str]:
@@ -857,11 +859,14 @@ def main():
         st.session_state.cache_version = 0
 
     # Load data (pass cache_version to force refresh when incremented)
-    roster_manager, error, data_source = load_data(st.session_state.cache_version)
+    roster_manager, error, data_source, load_time = load_data(st.session_state.cache_version)
 
     if error:
         st.error(f"Error: {error}")
         return
+
+    # Store load time for display
+    st.session_state.last_load_time = load_time
 
     analyzer = BoatAnalyzer(roster_manager)
 
@@ -954,7 +959,7 @@ def main():
             st.rerun()
 
     with header_cols[7]:
-        if st.button("Reload", type="secondary", use_container_width=True, help="Reload data from Google Sheets"):
+        if st.button("Reload", type="secondary", use_container_width=True, help=f"Reload data from Google Sheets (loaded: {st.session_state.get('last_load_time', '?')})"):
             st.session_state.cache_version += 1
             st.rerun()
 
