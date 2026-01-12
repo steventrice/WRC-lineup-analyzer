@@ -1379,14 +1379,14 @@ def main():
 
     with calc_col2:
         pace_predictor = st.radio(
-            "Pace Predictor",
-            options=["Power Law", "Paul's Law"],
+            "Predictor",
+            options=["Power", "Paul's"],
             horizontal=True,
             help="""**Power Law**: Fits a personalized fatigue curve to each athlete's test data. Uses formula: Watts = k × Distance^b. More accurate when athlete has multiple test distances.
 
 **Paul's Law**: Traditional formula adding 5 seconds per 500m split for each doubling of distance. Simple and reliable with single test score."""
         )
-        pace_predictor = "power_law" if pace_predictor == "Power Law" else "pauls_law"
+        pace_predictor = "power_law" if pace_predictor == "Power" else "pauls_law"
 
     st.divider()
 
@@ -1711,35 +1711,6 @@ def main():
     st.divider()
     st.subheader("Analysis Results")
 
-    # Debug: Show Power Law data for rowers in lineups
-    with st.expander("Debug: Power Law Data"):
-        st.write(f"**Current settings:** pace_predictor=`{pace_predictor}`, calc_method=`{calc_method}`")
-        st.write(f"**Target distance:** {target_distance}m")
-
-        all_lineup_rowers = set()
-        for key in ['lineup_a', 'lineup_b', 'lineup_c']:
-            for name in st.session_state[key]:
-                if name:
-                    all_lineup_rowers.add(name)
-
-        if all_lineup_rowers:
-            for name in sorted(all_lineup_rowers):
-                rower = roster_manager.get_rower(name)
-                if rower:
-                    st.markdown(f"**{name}**")
-                    data_points = rower.get_power_law_data_points()
-                    st.write(f"  Data points ({len(data_points)}): {data_points}")
-                    fit = rower.get_power_law_fit()
-                    st.write(f"  Power Law fit (k, b): {fit}")
-                    if fit:
-                        k, b = fit
-                        for test_dist in [1000, 2000, 5000]:
-                            pred_watts = PhysicsEngine.power_law_projection(k, b, test_dist)
-                            pred_split = PhysicsEngine.watts_to_split(pred_watts)
-                            st.write(f"    -> {test_dist//1000}K prediction: {format_split(pred_split)} ({pred_watts:.0f}W)")
-        else:
-            st.write("No rowers in lineups yet")
-
     if st.session_state.get('analyze_clicked', False):
         st.session_state.analyze_clicked = False
 
@@ -1849,7 +1820,7 @@ def main():
                                 })
 
                         if proj_data:
-                            st.dataframe(pd.DataFrame(proj_data), use_container_width=True, hide_index=True)
+                            st.table(pd.DataFrame(proj_data))
         else:
             st.info("No lineups to analyze. Add rowers to at least one lineup.")
     else:
