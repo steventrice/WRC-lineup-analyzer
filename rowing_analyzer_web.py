@@ -984,9 +984,12 @@ class BoatAnalyzer:
                 continue
 
             rowers.append(rower)
-            score = rower.get_closest_score(target_distance)
 
-            if not score:
+            # Check if rower has actual score at target distance
+            actual_score = rower.scores.get(target_distance)
+            closest_score = rower.get_closest_score(target_distance)
+
+            if not closest_score:
                 projections.append({
                     'rower': name,
                     'seat': seat_idx,
@@ -996,26 +999,34 @@ class BoatAnalyzer:
                 })
                 continue
 
-            # Project split using selected method
-            projection_method = 'pauls_law'  # Track which method was actually used
-            if pace_predictor == 'power_law':
-                # Try Power Law first - requires at least 2 data points
-                power_law_split = rower.project_split_power_law(target_distance)
-                if power_law_split and power_law_split > 0:
-                    projected_split = power_law_split
-                    projection_method = 'power_law'
-                else:
-                    # Fall back to Paul's Law
-                    projected_split = PhysicsEngine.pauls_law_projection(
-                        score.split_500m, score.distance, target_distance
-                    )
+            # Use actual score if available at exact target distance
+            if actual_score:
+                projected_split = actual_score.split_500m
+                projected_watts = actual_score.watts
+                projection_method = 'actual'
+                source_score = actual_score
             else:
-                # Use Paul's Law
-                projected_split = PhysicsEngine.pauls_law_projection(
-                    score.split_500m, score.distance, target_distance
-                )
+                # Project split using selected method
+                source_score = closest_score
+                projection_method = 'pauls_law'  # Track which method was actually used
+                if pace_predictor == 'power_law':
+                    # Try Power Law first - requires at least 2 data points
+                    power_law_split = rower.project_split_power_law(target_distance)
+                    if power_law_split and power_law_split > 0:
+                        projected_split = power_law_split
+                        projection_method = 'power_law'
+                    else:
+                        # Fall back to Paul's Law
+                        projected_split = PhysicsEngine.pauls_law_projection(
+                            closest_score.split_500m, closest_score.distance, target_distance
+                        )
+                else:
+                    # Use Paul's Law
+                    projected_split = PhysicsEngine.pauls_law_projection(
+                        closest_score.split_500m, closest_score.distance, target_distance
+                    )
 
-            projected_watts = PhysicsEngine.split_to_watts(projected_split)
+                projected_watts = PhysicsEngine.split_to_watts(projected_split)
 
             seat_side = None
             if not is_sculling:
@@ -1034,9 +1045,9 @@ class BoatAnalyzer:
                 'seat_side': seat_side,
                 'age': rower.age,
                 'side': rower.side_preference_str(),
-                'source_distance': score.distance,
-                'source_split': score.split_500m,
-                'source_sheet': score.source_sheet,
+                'source_distance': source_score.distance,
+                'source_split': source_score.split_500m,
+                'source_sheet': source_score.source_sheet,
                 'projected_split': projected_split,
                 'projected_watts': projected_watts,
                 'projection_method': projection_method,
@@ -1792,7 +1803,12 @@ def main():
                                 # Format prediction method indicator
                                 method = proj.get('projection_method', 'pauls_law')
                                 num_pts = proj.get('num_data_points', 1)
-                                method_str = f"PL({num_pts})" if method == 'power_law' else "Paul's"
+                                if method == 'actual':
+                                    method_str = "Actual"
+                                elif method == 'power_law':
+                                    method_str = f"Power({num_pts})"
+                                else:
+                                    method_str = "Paul's"
 
                                 proj_data.append({
                                     'Seat': proj.get('seat', '-'),
