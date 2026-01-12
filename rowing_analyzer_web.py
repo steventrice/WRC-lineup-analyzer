@@ -593,7 +593,7 @@ class RosterManager:
                 if name not in unmatched_names:
                     unmatched_names.append(name)
         if unmatched_names:
-            self.log(f"  Unmatched names in '{sheet_name}': {unmatched_names[:10]}")
+            self.log(f"  Unmatched names in '{sheet_name}': {unmatched_names}")
 
     def get_rower(self, name: str) -> Optional[Rower]:
         return self.rowers.get(name)
@@ -609,6 +609,10 @@ class RosterManager:
     def get_all_rowers_with_scores(self) -> List[str]:
         """Get all rowers with scores regardless of regatta"""
         return sorted([name for name, r in self.rowers.items() if r.scores])
+
+    def get_all_rowers(self) -> List[str]:
+        """Get all rowers regardless of scores"""
+        return sorted(self.rowers.keys())
 
 
 # =============================================================================
@@ -1075,11 +1079,14 @@ def main():
         # Search filter
         search_term = st.text_input("Search...", key="search")
 
-        # Get filtered rower list
+        # Get filtered rower list - show ALL rowers, not just those with scores
         if selected_regatta and selected_regatta != "__all__":
-            rower_names = roster_manager.get_attending_rowers(selected_regatta)
+            # For regatta filter, show attending rowers (with or without scores)
+            rower_names = [name for name, r in roster_manager.rowers.items()
+                          if r.is_attending(selected_regatta)]
+            rower_names = sorted(rower_names)
         else:
-            rower_names = roster_manager.get_all_rowers_with_scores()
+            rower_names = roster_manager.get_all_rowers()
 
         # Get rower objects
         rowers_list = [(name, roster_manager.get_rower(name)) for name in rower_names]
@@ -1179,8 +1186,11 @@ def main():
         # Women section
         st.markdown(f"**Women ({len(women)})**")
         for name, rower in women:
+            has_scores = bool(rower.scores)
             side = rower.side_preference_str()
-            if show_erg_time:
+            if not has_scores:
+                display_text = f"{name} | (no scores)"
+            elif show_erg_time:
                 dist = 1000 if show_erg_time[0] == '1k' else 5000
                 erg_time = format_erg_time(rower, dist, show_erg_time[1])
                 display_text = f"{name} | {erg_time}"
@@ -1190,7 +1200,7 @@ def main():
             is_selected = (st.session_state.selected_rower == name)
             btn_type = "primary" if is_selected else "secondary"
 
-            if st.button(display_text, key=f"rower_{name}", use_container_width=True, type=btn_type):
+            if st.button(display_text, key=f"rower_{name}", use_container_width=True, type=btn_type, disabled=not has_scores):
                 if is_selected:
                     st.session_state.selected_rower = None
                 else:
@@ -1202,8 +1212,11 @@ def main():
         # Men section
         st.markdown(f"**Men ({len(men)})**")
         for name, rower in men:
+            has_scores = bool(rower.scores)
             side = rower.side_preference_str()
-            if show_erg_time:
+            if not has_scores:
+                display_text = f"{name} | (no scores)"
+            elif show_erg_time:
                 dist = 1000 if show_erg_time[0] == '1k' else 5000
                 erg_time = format_erg_time(rower, dist, show_erg_time[1])
                 display_text = f"{name} | {erg_time}"
@@ -1213,7 +1226,7 @@ def main():
             is_selected = (st.session_state.selected_rower == name)
             btn_type = "primary" if is_selected else "secondary"
 
-            if st.button(display_text, key=f"rower_{name}", use_container_width=True, type=btn_type):
+            if st.button(display_text, key=f"rower_{name}", use_container_width=True, type=btn_type, disabled=not has_scores):
                 if is_selected:
                     st.session_state.selected_rower = None
                 else:
