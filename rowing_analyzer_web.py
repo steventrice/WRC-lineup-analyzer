@@ -9,8 +9,6 @@ import pandas as pd
 import numpy as np
 import math
 import statistics
-import hashlib
-from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
 from pathlib import Path
@@ -24,12 +22,6 @@ try:
 except ImportError:
     GSPREAD_AVAILABLE = False
 
-# Cookie manager for "Remember me" functionality
-try:
-    import extra_streamlit_components as stx
-    COOKIES_AVAILABLE = True
-except ImportError:
-    COOKIES_AVAILABLE = False
 
 
 # =============================================================================
@@ -1235,54 +1227,18 @@ def format_split(seconds: float) -> str:
 # STREAMLIT APP
 # =============================================================================
 
-def get_auth_token():
-    """Generate auth token from password for cookie storage."""
-    password = get_app_password()
-    # Create a hash of the password - not super secure but fine for this use case
-    return hashlib.sha256(f"wrc_lineup_{password}".encode()).hexdigest()[:32]
-
-
 def check_password():
     """Returns True if the user has the correct password."""
 
-    # Initialize cookie manager (can't be cached - uses widgets internally)
-    cookie_manager = None
-    if COOKIES_AVAILABLE:
-        try:
-            cookie_manager = stx.CookieManager(key="wrc_cookies")
-        except Exception:
-            pass
-
-    # Check for existing auth cookie
-    if cookie_manager and "password_correct" not in st.session_state:
-        try:
-            auth_cookie = cookie_manager.get("wrc_auth")
-            if auth_cookie == get_auth_token():
-                st.session_state["password_correct"] = True
-                return True
-        except Exception:
-            pass
-
     def password_entered():
         """Checks whether a password entered by the user is correct."""
-        # Check if password key exists (may not during cookie-triggered reruns)
         if "password" not in st.session_state:
             return
         if st.session_state["password"] == get_app_password():
             st.session_state["password_correct"] = True
-            st.session_state["set_cookie"] = st.session_state.get("remember_me", False)
             del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
-
-    # Set cookie after successful login (needs to happen outside callback)
-    if cookie_manager and st.session_state.get("set_cookie", False):
-        try:
-            cookie_manager.set("wrc_auth", get_auth_token(),
-                               expires_at=datetime.now() + timedelta(days=30))
-            st.session_state["set_cookie"] = False
-        except Exception:
-            pass
 
     if "password_correct" not in st.session_state:
         col_logo, col_title = st.columns([1, 10])
@@ -1296,8 +1252,6 @@ def check_password():
             on_change=password_entered,
             key="password"
         )
-        if cookie_manager:
-            st.checkbox("Remember me", key="remember_me")
         st.info("Contact WRC leadership for access credentials.")
         return False
 
@@ -1313,8 +1267,6 @@ def check_password():
             on_change=password_entered,
             key="password"
         )
-        if cookie_manager:
-            st.checkbox("Remember me", key="remember_me")
         st.error("Incorrect password. Please try again.")
         return False
 
