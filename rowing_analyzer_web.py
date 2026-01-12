@@ -482,6 +482,14 @@ class RosterManager:
 
         self.log(f"Loaded {signups_loaded} regatta signups")
 
+        # Debug: show signups for Steven Rice
+        if "Steven Rice" in self.rowers:
+            sr = self.rowers["Steven Rice"]
+            self.log(f"DEBUG Steven Rice signups:")
+            for reg, attending in sr.regatta_signups.items():
+                if attending:
+                    self.log(f"  - {reg}: YES")
+
     def _load_score_sheets(self, xl: pd.ExcelFile):
         """Load scores from score sheets (1K, 5K, etc.)"""
         score_sheets = []
