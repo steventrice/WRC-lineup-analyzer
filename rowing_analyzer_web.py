@@ -774,26 +774,53 @@ def get_google_sheets_config():
         return None, None
 
 
-@st.cache_resource(ttl=300)  # Cache for 5 minutes, then refresh from Google Sheets
-def load_data():
+def _load_data_impl():
     """Load data from Google Sheets (preferred) or local Excel file (fallback)"""
     roster_manager = RosterManager()
+    errors = []
 
     # Try Google Sheets first
     credentials, spreadsheet_id = get_google_sheets_config()
-    if credentials and spreadsheet_id and GSPREAD_AVAILABLE:
-        success = roster_manager.load_from_google_sheets(spreadsheet_id, credentials)
-        if success:
-            return roster_manager, None, "google_sheets"
+    if not GSPREAD_AVAILABLE:
+        errors.append("gspread library not available")
+    elif not credentials:
+        errors.append("No gcp_service_account in secrets")
+    elif not spreadsheet_id:
+        errors.append("No spreadsheet_id in secrets")
+    else:
+        try:
+            success = roster_manager.load_from_google_sheets(spreadsheet_id, credentials)
+            if success:
+                return roster_manager, None, "google_sheets"
+            else:
+                errors.append(f"Google Sheets load failed: {'; '.join(roster_manager.load_log[-3:])}")
+        except Exception as e:
+            errors.append(f"Google Sheets error: {type(e).__name__}: {e}")
 
-    # Fall back to local Excel file
-    filepath = Path("2026 WRC Racing Spreadsheet.xlsx")
+    # Fall back to local Excel file - use script directory for reliable path
+    script_dir = Path(__file__).parent
+    filepath = script_dir / "2026 WRC Racing Spreadsheet.xlsx"
     if filepath.exists():
         success = roster_manager.load_from_excel(str(filepath))
         if success:
             return roster_manager, None, "local_excel"
+        else:
+            errors.append(f"Excel load failed: {'; '.join(roster_manager.load_log[-3:])}")
+    else:
+        errors.append(f"Excel file not found at: {filepath}")
 
-    return None, "No data source available. Configure Google Sheets or add local Excel file.", None
+    return None, f"No data source available. Errors: {' | '.join(errors)}", None
+
+
+@st.cache_resource(ttl=300)  # Cache for 5 minutes, then refresh from Google Sheets
+def load_data():
+    """Cached wrapper - only caches successful loads"""
+    result = _load_data_impl()
+    if result[0] is None:
+        # Don't cache failures - clear and return
+        st.cache_resource.clear()
+        return result
+    return result
 
 
 def get_seat_labels(num_seats: int) -> List[str]:
