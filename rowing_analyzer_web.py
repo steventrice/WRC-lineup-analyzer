@@ -99,7 +99,31 @@ class Rower:
         """Return formatted summary of available scores"""
         if not self.scores:
             return "No scores"
-        return ", ".join([f"{d//1000}K" for d in sorted(self.scores.keys())])
+        parts = []
+        for d in sorted(self.scores.keys()):
+            if d >= 1000:
+                parts.append(f"{d//1000}K")
+            else:
+                parts.append(f"{d}m")
+        return ", ".join(parts)
+
+    def get_power_law_data_points(self) -> List[Tuple[int, float]]:
+        """Get all (distance, watts) pairs for Power Law fitting"""
+        return [(score.distance, score.watts) for score in self.scores.values()]
+
+    def get_power_law_fit(self) -> Optional[Tuple[float, float]]:
+        """Fit Power Law to this rower's data. Returns (k, b) or None."""
+        data_points = self.get_power_law_data_points()
+        return PhysicsEngine.fit_power_law(data_points)
+
+    def project_split_power_law(self, target_distance: int) -> Optional[float]:
+        """Project split at target distance using Power Law fit."""
+        fit = self.get_power_law_fit()
+        if not fit:
+            return None
+        k, b = fit
+        predicted_watts = PhysicsEngine.power_law_projection(k, b, target_distance)
+        return PhysicsEngine.watts_to_split(predicted_watts)
 
 
 # =============================================================================
@@ -183,7 +207,7 @@ class TimeParser:
 # =============================================================================
 
 class PhysicsEngine:
-    """Rowing physics calculations using Paul's Law"""
+    """Rowing physics calculations using Paul's Law and Power Law"""
 
     @staticmethod
     def calculate_500m_split(total_time: float, distance: int) -> float:
@@ -204,6 +228,24 @@ class PhysicsEngine:
         return 500 * (2.80 / watts) ** (1/3)
 
     @staticmethod
+    def time_to_watts(time_seconds: float, distance: int) -> float:
+        """Convert total time and distance to watts.
+        Formula: Watts = 2.8 × (Seconds/Meters)^3"""
+        if time_seconds <= 0 or distance <= 0:
+            return 0
+        pace = time_seconds / distance  # seconds per meter
+        return 2.8 / (pace ** 3)
+
+    @staticmethod
+    def watts_to_time(watts: float, distance: int) -> float:
+        """Convert watts and distance back to total time.
+        Formula: Seconds = (Watts/2.8)^(1/3) × Distance"""
+        if watts <= 0:
+            return float('inf')
+        pace = (2.8 / watts) ** (1/3)  # seconds per meter
+        return pace * distance
+
+    @staticmethod
     def pauls_law_projection(known_split: float, known_dist: int, target_dist: int) -> float:
         """
         Apply Paul's Law to project split at different distance.
@@ -217,6 +259,67 @@ class PhysicsEngine:
         distance_ratio = target_dist / known_dist
         split_adjustment = 5 * math.log2(distance_ratio)
         return known_split + split_adjustment
+
+    @staticmethod
+    def fit_power_law(data_points: List[Tuple[int, float]]) -> Optional[Tuple[float, float]]:
+        """
+        Fit Power Law to multiple (distance, watts) data points.
+        Equation: Watts = k × Distance^b
+
+        Uses least squares fit on log-transformed data.
+        Returns (k, b) tuple, or None if insufficient data.
+        """
+        if len(data_points) < 2:
+            return None
+
+        # Filter out invalid points
+        valid_points = [(d, w) for d, w in data_points if d > 0 and w > 0]
+        if len(valid_points) < 2:
+            return None
+
+        # For 2 points, use exact solution
+        if len(valid_points) == 2:
+            d1, w1 = valid_points[0]
+            d2, w2 = valid_points[1]
+
+            # b = (ln(w2) - ln(w1)) / (ln(d2) - ln(d1))
+            ln_d1, ln_d2 = math.log(d1), math.log(d2)
+            ln_w1, ln_w2 = math.log(w1), math.log(w2)
+
+            if abs(ln_d2 - ln_d1) < 0.001:  # Distances too similar
+                return None
+
+            b = (ln_w2 - ln_w1) / (ln_d2 - ln_d1)
+            k = math.exp(ln_w1 - b * ln_d1)
+            return (k, b)
+
+        # For 3+ points, use least squares on log-transformed data
+        # ln(W) = ln(k) + b * ln(D)
+        n = len(valid_points)
+        sum_ln_d = sum(math.log(d) for d, w in valid_points)
+        sum_ln_w = sum(math.log(w) for d, w in valid_points)
+        sum_ln_d_sq = sum(math.log(d) ** 2 for d, w in valid_points)
+        sum_ln_d_ln_w = sum(math.log(d) * math.log(w) for d, w in valid_points)
+
+        denominator = n * sum_ln_d_sq - sum_ln_d ** 2
+        if abs(denominator) < 0.001:
+            return None
+
+        b = (n * sum_ln_d_ln_w - sum_ln_d * sum_ln_w) / denominator
+        ln_k = (sum_ln_w - b * sum_ln_d) / n
+        k = math.exp(ln_k)
+
+        return (k, b)
+
+    @staticmethod
+    def power_law_projection(k: float, b: float, target_dist: int) -> float:
+        """
+        Predict watts at target distance using fitted Power Law.
+        TargetWatts = k × TargetDistance^b
+        """
+        if target_dist <= 0:
+            return 0
+        return k * (target_dist ** b)
 
     @staticmethod
     def calculate_boat_split(watts_list: List[float]) -> float:
@@ -590,19 +693,40 @@ class RosterManager:
         self.log(f"Loaded {signups_loaded} regatta signups")
 
     def _load_score_sheets(self, xl: pd.ExcelFile):
-        """Load scores from score sheets (1K, 5K, etc.)"""
+        """Load scores from score sheets (1K, 5K, 100m, 250m, 2', etc.)"""
         score_sheets = []
+        short_test_sheets = []
 
         for sheet in xl.sheet_names:
+            # Check for standard K distances (1K, 5K, etc.)
             match = re.search(r'(\d+)\s*[Kk]', sheet)
             if match:
                 distance = int(match.group(1)) * 1000
                 score_sheets.append((sheet, distance))
+                continue
+
+            # Check for meter distances (100m, 250m, etc.)
+            match = re.search(r'(\d+)\s*[Mm]', sheet)
+            if match:
+                distance = int(match.group(1))
+                if distance < 1000:  # Only short distances
+                    short_test_sheets.append((sheet, distance))
+                continue
+
+            # Check for time-based tests (2', 2 min, etc.)
+            if re.search(r"2['\s]*min|2'", sheet, re.IGNORECASE):
+                short_test_sheets.append((sheet, '2min'))
 
         self.log(f"Found score sheets: {[(s, d) for s, d in score_sheets]}")
+        if short_test_sheets:
+            self.log(f"Found short test sheets: {[(s, d) for s, d in short_test_sheets]}")
 
         for sheet_name, distance in score_sheets:
             self._load_scores_from_sheet(xl, sheet_name, distance)
+
+        # Load short test sheets (100m, 250m, 2-minute pieces)
+        for sheet_name, distance in short_test_sheets:
+            self._load_short_test_scores(xl, sheet_name, distance)
 
     def _load_scores_from_sheet(self, xl: pd.ExcelFile, sheet_name: str, distance: int):
         """Load scores from a specific score sheet"""
@@ -710,6 +834,87 @@ class RosterManager:
         if unmatched_names:
             self.log(f"  Unmatched names in '{sheet_name}': {unmatched_names}")
 
+    def _load_short_test_scores(self, xl: pd.ExcelFile, sheet_name: str, distance_or_type):
+        """Load scores from short test sheets (100m, 250m, 2-minute pieces)"""
+        df = xl.parse(sheet_name)
+        self.log(f"Loading short tests from '{sheet_name}', columns: {list(df.columns)}")
+
+        scores_loaded = 0
+        fuzzy_matches = 0
+
+        for _, row in df.iterrows():
+            name = str(row.get('Name', '')).strip()
+            if not name or name == 'nan':
+                continue
+
+            # Use fuzzy matching to find rower
+            canonical_name = self.find_rower(name)
+            if not canonical_name:
+                continue
+
+            if canonical_name != name:
+                fuzzy_matches += 1
+
+            rower = self.rowers[canonical_name]
+
+            # For 2-minute tests, we need to get the distance from meters covered
+            if distance_or_type == '2min':
+                # Look for distance/meters column
+                distance = None
+                for col in ['Distance', 'Meters', 'Total Meters', 'Distance (m)']:
+                    if col in row.index and pd.notna(row[col]):
+                        try:
+                            distance = int(float(str(row[col]).replace(',', '')))
+                            break
+                        except (ValueError, TypeError):
+                            pass
+
+                if not distance:
+                    continue
+
+                # For 2-minute test, time is always 120 seconds
+                time_seconds = 120.0
+            else:
+                # Fixed distance test (100m, 250m)
+                distance = distance_or_type
+
+                # Look for time
+                time_seconds = None
+                for col in ['Time', 'Time in Seconds', 'Time (s)', 'Seconds']:
+                    if col in row.index and pd.notna(row[col]):
+                        parsed = TimeParser.parse(row[col])
+                        if parsed and parsed > 0:
+                            time_seconds = parsed
+                            break
+
+                if not time_seconds:
+                    continue
+
+            # Calculate split and watts
+            split_500m = PhysicsEngine.calculate_500m_split(time_seconds, distance)
+
+            # Validate split is reasonable (for short tests, can be faster)
+            if split_500m < 60 or split_500m > 180:
+                continue
+
+            watts = PhysicsEngine.split_to_watts(split_500m)
+
+            score = Score(
+                distance=distance,
+                time_seconds=time_seconds,
+                split_500m=split_500m,
+                watts=watts,
+                source_sheet=sheet_name
+            )
+
+            rower.add_score(score)
+            scores_loaded += 1
+
+        log_msg = f"Loaded {scores_loaded} scores from '{sheet_name}'"
+        if fuzzy_matches > 0:
+            log_msg += f" ({fuzzy_matches} fuzzy matched)"
+        self.log(log_msg)
+
     def get_rower(self, name: str) -> Optional[Rower]:
         return self.rowers.get(name)
 
@@ -747,10 +952,12 @@ class BoatAnalyzer:
         self.roster = roster
 
     def analyze_lineup(self, rower_names: List[str], target_distance: int,
-                       boat_class: str = '4+', calc_method: str = 'watts') -> Dict[str, Any]:
+                       boat_class: str = '4+', calc_method: str = 'watts',
+                       pace_predictor: str = 'power_law') -> Dict[str, Any]:
         """Analyze a lineup and return comprehensive results.
 
         calc_method: 'watts' (average watts, convert to split) or 'split' (average splits directly)
+        pace_predictor: 'power_law' (fit personalized curve) or 'pauls_law' (traditional +5s/doubling)
         """
 
         if not rower_names:
@@ -788,9 +995,25 @@ class BoatAnalyzer:
                 })
                 continue
 
-            projected_split = PhysicsEngine.pauls_law_projection(
-                score.split_500m, score.distance, target_distance
-            )
+            # Project split using selected method
+            projection_method = 'pauls_law'  # Track which method was actually used
+            if pace_predictor == 'power_law':
+                # Try Power Law first - requires at least 2 data points
+                power_law_split = rower.project_split_power_law(target_distance)
+                if power_law_split and power_law_split > 0:
+                    projected_split = power_law_split
+                    projection_method = 'power_law'
+                else:
+                    # Fall back to Paul's Law
+                    projected_split = PhysicsEngine.pauls_law_projection(
+                        score.split_500m, score.distance, target_distance
+                    )
+            else:
+                # Use Paul's Law
+                projected_split = PhysicsEngine.pauls_law_projection(
+                    score.split_500m, score.distance, target_distance
+                )
+
             projected_watts = PhysicsEngine.split_to_watts(projected_split)
 
             seat_side = None
@@ -814,7 +1037,9 @@ class BoatAnalyzer:
                 'source_split': score.split_500m,
                 'source_sheet': score.source_sheet,
                 'projected_split': projected_split,
-                'projected_watts': projected_watts
+                'projected_watts': projected_watts,
+                'projection_method': projection_method,
+                'num_data_points': len(rower.scores)
             })
 
         if not all_watts:
@@ -1139,8 +1364,8 @@ def main():
             st.session_state.cache_version += 1
             st.rerun()
 
-    # Calculation method toggle
-    calc_col1, calc_col2 = st.columns([1, 5])
+    # Calculation method and pace predictor toggles
+    calc_col1, calc_col2, calc_col3 = st.columns([1, 1, 4])
     with calc_col1:
         calc_method = st.radio(
             "Calculation",
@@ -1151,6 +1376,17 @@ def main():
 **Watts method**: Averages power (watts) then converts to split. Faster prediction, assumes perfect synchronization."""
         )
         calc_method = calc_method.lower()
+
+    with calc_col2:
+        pace_predictor = st.radio(
+            "Pace Predictor",
+            options=["Power Law", "Paul's Law"],
+            horizontal=True,
+            help="""**Power Law**: Fits a personalized fatigue curve to each athlete's test data. Uses formula: Watts = k × Distance^b. More accurate when athlete has multiple test distances.
+
+**Paul's Law**: Traditional formula adding 5 seconds per 500m split for each doubling of distance. Simple and reliable with single test score."""
+        )
+        pace_predictor = "power_law" if pace_predictor == "Power Law" else "pauls_law"
 
     st.divider()
 
@@ -1475,6 +1711,35 @@ def main():
     st.divider()
     st.subheader("Analysis Results")
 
+    # Debug: Show Power Law data for rowers in lineups
+    with st.expander("Debug: Power Law Data"):
+        st.write(f"**Current settings:** pace_predictor=`{pace_predictor}`, calc_method=`{calc_method}`")
+        st.write(f"**Target distance:** {target_distance}m")
+
+        all_lineup_rowers = set()
+        for key in ['lineup_a', 'lineup_b', 'lineup_c']:
+            for name in st.session_state[key]:
+                if name:
+                    all_lineup_rowers.add(name)
+
+        if all_lineup_rowers:
+            for name in sorted(all_lineup_rowers):
+                rower = roster_manager.get_rower(name)
+                if rower:
+                    st.markdown(f"**{name}**")
+                    data_points = rower.get_power_law_data_points()
+                    st.write(f"  Data points ({len(data_points)}): {data_points}")
+                    fit = rower.get_power_law_fit()
+                    st.write(f"  Power Law fit (k, b): {fit}")
+                    if fit:
+                        k, b = fit
+                        for test_dist in [1000, 2000, 5000]:
+                            pred_watts = PhysicsEngine.power_law_projection(k, b, test_dist)
+                            pred_split = PhysicsEngine.watts_to_split(pred_watts)
+                            st.write(f"    -> {test_dist//1000}K prediction: {format_split(pred_split)} ({pred_watts:.0f}W)")
+        else:
+            st.write("No rowers in lineups yet")
+
     if st.session_state.get('analyze_clicked', False):
         st.session_state.analyze_clicked = False
 
@@ -1485,7 +1750,7 @@ def main():
             rower_names_in_lineup = [r for r in lineup if r is not None]
 
             if rower_names_in_lineup:
-                result = analyzer.analyze_lineup(rower_names_in_lineup, target_distance, boat_class, calc_method)
+                result = analyzer.analyze_lineup(rower_names_in_lineup, target_distance, boat_class, calc_method, pace_predictor)
                 result['lineup_id'] = lineup_id
                 results.append(result)
 
@@ -1545,16 +1810,29 @@ def main():
                         proj_data = []
                         for proj in result['projections']:
                             if 'error' not in proj:
+                                # Format source distance - handle short distances
+                                src_dist = proj.get('source_distance', 0)
+                                if src_dist >= 1000:
+                                    src_str = f"{src_dist//1000}K"
+                                else:
+                                    src_str = f"{src_dist}m"
+
+                                # Format prediction method indicator
+                                method = proj.get('projection_method', 'pauls_law')
+                                num_pts = proj.get('num_data_points', 1)
+                                method_str = f"PL({num_pts})" if method == 'power_law' else "Paul's"
+
                                 proj_data.append({
                                     'Seat': proj.get('seat', '-'),
                                     'Side': proj.get('seat_side', '-'),
                                     'Rower': proj['rower'],
                                     'Age': proj.get('age', '-'),
                                     'Pref': proj.get('side', '-'),
-                                    'Source': f"{proj.get('source_distance', 0)//1000}K",
+                                    'Source': src_str,
                                     'Source Split': format_split(proj.get('source_split', 0)),
                                     'Projected Split': format_split(proj.get('projected_split', 0)),
-                                    'Watts': f"{proj.get('projected_watts', 0):.0f}"
+                                    'Watts': f"{proj.get('projected_watts', 0):.0f}",
+                                    'Method': method_str
                                 })
                             else:
                                 proj_data.append({
@@ -1566,7 +1844,8 @@ def main():
                                     'Source': '-',
                                     'Source Split': '-',
                                     'Projected Split': '-',
-                                    'Watts': proj.get('error', 'Error')
+                                    'Watts': proj.get('error', 'Error'),
+                                    'Method': '-'
                                 })
 
                         if proj_data:
