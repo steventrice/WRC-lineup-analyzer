@@ -1815,36 +1815,6 @@ def main():
     st.divider()
     st.subheader("Analysis Results")
 
-    # Debug: Show Power Law data for rowers in lineups
-    with st.expander("Debug: Power Law Data"):
-        st.write(f"**Settings:** predictor=`{pace_predictor}`, calc=`{calc_method}`, target=`{target_distance}m`")
-
-        all_lineup_rowers = set()
-        for key in ['lineup_a', 'lineup_b', 'lineup_c']:
-            for name in st.session_state[key]:
-                if name:
-                    all_lineup_rowers.add(name)
-
-        if all_lineup_rowers:
-            for name in sorted(all_lineup_rowers):
-                rower = roster_manager.get_rower(name)
-                if rower:
-                    st.markdown(f"**{name}**")
-                    st.write(f"  Scores: {rower.scores_summary()}")
-                    data_points = rower.get_power_law_data_points()
-                    st.write(f"  Data points ({len(data_points)}): {data_points}")
-                    fit = rower.get_power_law_fit()
-                    st.write(f"  Power Law fit (k, b): {fit}")
-                    if fit:
-                        k, b = fit
-                        pred_watts = PhysicsEngine.power_law_projection(k, b, target_distance)
-                        pred_split = PhysicsEngine.watts_to_split(pred_watts)
-                        st.write(f"  -> {target_distance}m prediction: {format_split(pred_split)} ({pred_watts:.0f}W)")
-                    else:
-                        st.write(f"  -> Power Law fit failed, will use Paul's Law")
-        else:
-            st.write("No rowers in lineups yet")
-
     if st.session_state.get('analyze_clicked', False):
         st.session_state.analyze_clicked = False
 
