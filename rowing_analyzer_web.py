@@ -1020,11 +1020,11 @@ def main():
     with calc_col1:
         calc_method = st.radio(
             "Calculation",
-            options=["Watts", "Split"],
+            options=["Split", "Watts"],
             horizontal=True,
-            help="""**Watts method**: Averages power (watts) then converts to split. Faster prediction, assumes perfect synchronization.
+            help="""**Split method**: Averages splits directly. More conservative, may better reflect real-world crew dynamics with varied abilities.
 
-**Split method**: Averages splits directly. More conservative, may better reflect real-world crew dynamics with varied abilities."""
+**Watts method**: Averages power (watts) then converts to split. Faster prediction, assumes perfect synchronization."""
         )
         calc_method = calc_method.lower()
 
