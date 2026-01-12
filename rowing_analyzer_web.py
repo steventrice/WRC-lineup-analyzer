@@ -413,7 +413,6 @@ class RosterManager:
                 has_day_prefix = bool(day_pattern.match(str(col)))
                 has_date = bool(date_pattern.search(str(col)))
                 has_location = bool(location_pattern.search(str(col)))
-                is_signup_col = has_day_prefix or has_date or has_location
 
                 base_name = str(col)
                 base_name = re.sub(r'^(SUNDAY|SATURDAY|FRIDAY|THURSDAY|MONDAY|TUESDAY|WEDNESDAY)\n', '', base_name, flags=re.IGNORECASE)
@@ -430,22 +429,27 @@ class RosterManager:
                 col_values = col_data.dropna().astype(str).str.lower().unique()
                 has_yes = any('yes' in str(v) for v in col_values)
 
+                # Priority: 1=day prefix (best), 2=plain name, 3=date only (info column)
+                if has_day_prefix:
+                    priority = 1
+                elif has_date:
+                    priority = 3  # Date-only columns are usually info, not signup
+                elif has_location:
+                    priority = 2
+                else:
+                    priority = 2  # Plain column name - likely the signup column
+
                 if base_name not in regatta_candidates:
                     regatta_candidates[base_name] = []
-                regatta_candidates[base_name].append((col, is_signup_col, has_yes))
+                regatta_candidates[base_name].append((col, priority, has_yes))
 
         regatta_cols = []
         regatta_display_names = {}
         for base_name, candidates in regatta_candidates.items():
-            signup_cols = [(c, hy) for c, is_signup, hy in candidates if is_signup]
-            if signup_cols:
-                selected = signup_cols[0][0]
-            else:
-                yes_cols = [c for c, is_signup, hy in candidates if hy]
-                if yes_cols:
-                    selected = yes_cols[0]
-                else:
-                    selected = candidates[0][0]
+            # Sort by: has_yes (True first), then priority (lower is better)
+            # This prefers columns with actual "yes" values, then by column type
+            sorted_candidates = sorted(candidates, key=lambda x: (not x[2], x[1]))
+            selected = sorted_candidates[0][0]
 
             regatta_cols.append(selected)
             regatta_display_names[selected] = base_name
@@ -489,6 +493,16 @@ class RosterManager:
             for reg, attending in sr.regatta_signups.items():
                 if attending:
                     self.log(f"  - {reg}: YES")
+
+        # Debug: show raw values for Steven Rice in Charles columns
+        for _, row in df.iterrows():
+            name = str(row.get(name_col, '')).strip()
+            if name == "Steven Rice":
+                self.log(f"DEBUG Steven Rice raw column values:")
+                for col in df.columns:
+                    if 'charles' in str(col).lower():
+                        val = row.get(col, '')
+                        self.log(f"  Column '{col}': '{val}'")
 
     def _load_score_sheets(self, xl: pd.ExcelFile):
         """Load scores from score sheets (1K, 5K, etc.)"""
