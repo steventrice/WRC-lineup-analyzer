@@ -881,7 +881,7 @@ def main():
     # HEADER: Logo, Title, and Configuration
     # =========================================================================
 
-    header_cols = st.columns([1, 3, 2, 2, 2, 2, 2])
+    header_cols = st.columns([1, 3, 1, 2, 2, 2, 2, 2])
 
     with header_cols[0]:
         st.image("wrc-badge-red.png", width=50)
@@ -889,13 +889,18 @@ def main():
     with header_cols[1]:
         st.markdown("### Lineup Comparison")
 
+    with header_cols[2]:
+        if st.button("🔄", help="Refresh data from Google Sheets"):
+            st.cache_resource.clear()
+            st.rerun()
+
     # Regatta selection
     regatta_options = {"All Rowers": "__all__"}
     for col in roster_manager.regattas:
         display = roster_manager.regatta_display_names.get(col, col)
         regatta_options[display] = col
 
-    with header_cols[2]:
+    with header_cols[3]:
         selected_regatta_display = st.selectbox(
             "Regatta",
             options=list(regatta_options.keys()),
@@ -905,7 +910,7 @@ def main():
 
     # Distance selection
     distance_options = {"1K": 1000, "2K": 2000, "5K": 5000}
-    with header_cols[3]:
+    with header_cols[4]:
         selected_distance_display = st.selectbox(
             "Distance",
             options=list(distance_options.keys()),
@@ -915,7 +920,7 @@ def main():
 
     # Boat class selection
     boat_options = {"1x": "1x", "2x": "2x", "2-": "2-", "4x": "4x", "4+": "4+", "4-": "4-", "8+": "8+"}
-    with header_cols[4]:
+    with header_cols[5]:
         boat_class = st.selectbox(
             "Boat",
             options=list(boat_options.keys()),
@@ -936,11 +941,11 @@ def main():
                 new_lineup[i] = current[i]
             st.session_state[lineup_key] = new_lineup
 
-    with header_cols[5]:
+    with header_cols[6]:
         if st.button("Analyze", type="primary", use_container_width=True):
             st.session_state.analyze_clicked = True
 
-    with header_cols[6]:
+    with header_cols[7]:
         if st.button("Clear All", type="secondary", use_container_width=True):
             st.session_state.lineup_a = [None] * num_seats
             st.session_state.lineup_b = [None] * num_seats
