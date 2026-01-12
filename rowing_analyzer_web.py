@@ -240,14 +240,115 @@ class RosterManager:
         '8+': 0.02
     }
 
+    # Common name variations for fuzzy matching
+    NAME_VARIATIONS = {
+        'alex': ['alexander', 'alexis'],
+        'alexander': ['alex'],
+        'alexis': ['alex'],
+        'mike': ['michael'],
+        'michael': ['mike'],
+        'kat': ['kathryn', 'katherine', 'kate', 'kathy'],
+        'kathryn': ['kat', 'kate', 'kathy'],
+        'katherine': ['kat', 'kate', 'kathy'],
+        'kate': ['kat', 'kathryn', 'katherine'],
+        'kathy': ['kat', 'kathryn', 'katherine'],
+        'jon': ['jonathan', 'john'],
+        'jonathan': ['jon', 'john'],
+        'john': ['jon', 'jonathan'],
+        'jim': ['james', 'jimmy'],
+        'james': ['jim', 'jimmy'],
+        'bob': ['robert', 'rob'],
+        'robert': ['bob', 'rob'],
+        'rob': ['robert', 'bob'],
+        'bill': ['william', 'will'],
+        'william': ['bill', 'will'],
+        'will': ['william', 'bill'],
+        'dick': ['richard', 'rick'],
+        'richard': ['dick', 'rick'],
+        'rick': ['richard', 'dick'],
+        'dan': ['daniel', 'danny'],
+        'daniel': ['dan', 'danny'],
+        'steve': ['steven', 'stephen'],
+        'steven': ['steve', 'stephen'],
+        'stephen': ['steve', 'steven'],
+        'chris': ['christopher'],
+        'christopher': ['chris'],
+        'matt': ['matthew'],
+        'matthew': ['matt'],
+        'tom': ['thomas', 'tommy'],
+        'thomas': ['tom', 'tommy'],
+        'jen': ['jennifer', 'jenny'],
+        'jennifer': ['jen', 'jenny'],
+        'jenny': ['jen', 'jennifer'],
+        'liz': ['elizabeth', 'beth', 'lizzy'],
+        'elizabeth': ['liz', 'beth', 'lizzy'],
+        'beth': ['elizabeth', 'liz'],
+        'sam': ['samuel', 'samantha'],
+        'samuel': ['sam'],
+        'samantha': ['sam'],
+        'nick': ['nicholas'],
+        'nicholas': ['nick'],
+        'tony': ['anthony'],
+        'anthony': ['tony'],
+        'ed': ['edward', 'eddie'],
+        'edward': ['ed', 'eddie'],
+        'joe': ['joseph'],
+        'joseph': ['joe'],
+        'lindsey': ['lindsay'],
+        'lindsay': ['lindsey'],
+        'carlee': ['carly', 'carlie'],
+        'carly': ['carlee', 'carlie'],
+        'sophia': ['sophie'],
+        'sophie': ['sophia'],
+        'cami': ['camille', 'camilla'],
+        'camille': ['cami'],
+    }
+
     def __init__(self):
         self.rowers: Dict[str, Rower] = {}
         self.regattas: List[str] = []
         self.regatta_display_names: Dict[str, str] = {}
         self.load_log: List[str] = []
+        self.name_map: Dict[str, str] = {}  # Maps variations to canonical names
 
     def log(self, msg: str):
         self.load_log.append(msg)
+
+    def _build_name_map(self):
+        """Build a map of name variations to canonical roster names"""
+        self.name_map = {}
+        for canonical_name in self.rowers.keys():
+            # Add exact match
+            self.name_map[canonical_name.lower()] = canonical_name
+
+            # Parse first and last name
+            parts = canonical_name.split()
+            if len(parts) >= 2:
+                first = parts[0].lower()
+                last = ' '.join(parts[1:])
+
+                # Add variations of first name + last name
+                variations = self.NAME_VARIATIONS.get(first, [])
+                for var in variations:
+                    var_name = f"{var.title()} {last}"
+                    self.name_map[var_name.lower()] = canonical_name
+
+    def find_rower(self, name: str) -> Optional[str]:
+        """Find a rower by name, using fuzzy matching if needed.
+        Returns the canonical name from the roster, or None if not found."""
+        if not name:
+            return None
+
+        # Try exact match first
+        if name in self.rowers:
+            return name
+
+        # Try case-insensitive match
+        name_lower = name.lower().strip()
+        if name_lower in self.name_map:
+            return self.name_map[name_lower]
+
+        return None
 
     def load_from_excel(self, filepath: str) -> bool:
         """Load all data from the Excel spreadsheet"""
@@ -256,6 +357,7 @@ class RosterManager:
             xl = pd.ExcelFile(filepath)
 
             self._load_roster(xl)
+            self._build_name_map()  # Build fuzzy matching map
             self._load_regatta_signups(xl)
             self._load_score_sheets(xl)
 
@@ -307,6 +409,7 @@ class RosterManager:
             self.log(f"Available sheets: {gs_wrapper.sheet_names}")
 
             self._load_roster(gs_wrapper)
+            self._build_name_map()  # Build fuzzy matching map
             self._load_regatta_signups(gs_wrapper)
             self._load_score_sheets(gs_wrapper)
 
@@ -506,12 +609,21 @@ class RosterManager:
         df = xl.parse(sheet_name)
 
         scores_loaded = 0
+        fuzzy_matches = 0
         for _, row in df.iterrows():
             name = str(row.get('Name', '')).strip()
-            if not name or name == 'nan' or name not in self.rowers:
+            if not name or name == 'nan':
                 continue
 
-            rower = self.rowers[name]
+            # Use fuzzy matching to find rower
+            canonical_name = self.find_rower(name)
+            if not canonical_name:
+                continue
+
+            if canonical_name != name:
+                fuzzy_matches += 1
+
+            rower = self.rowers[canonical_name]
 
             # Collect all valid times from this row
             times_to_try = []
@@ -583,13 +695,16 @@ class RosterManager:
             rower.add_score(score)
             scores_loaded += 1
 
-        self.log(f"Loaded {scores_loaded} scores from '{sheet_name}'")
+        log_msg = f"Loaded {scores_loaded} scores from '{sheet_name}'"
+        if fuzzy_matches > 0:
+            log_msg += f" ({fuzzy_matches} fuzzy matched)"
+        self.log(log_msg)
 
-        # Log names in score sheet that don't match roster
+        # Log names in score sheet that don't match roster (even with fuzzy matching)
         unmatched_names = []
         for _, row in df.iterrows():
             name = str(row.get('Name', '')).strip()
-            if name and name != 'nan' and name not in self.rowers:
+            if name and name != 'nan' and not self.find_rower(name):
                 if name not in unmatched_names:
                     unmatched_names.append(name)
         if unmatched_names:
