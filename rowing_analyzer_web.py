@@ -18,8 +18,13 @@ import re
 # CONFIGURATION
 # =============================================================================
 
-# Password for access (in production, use environment variables or secrets)
-APP_PASSWORD = "rowing2026"
+def get_app_password():
+    """Get password from Streamlit secrets or fall back to default for local dev"""
+    try:
+        return st.secrets["app_password"]
+    except (KeyError, FileNotFoundError):
+        # Fallback for local development
+        return "doubleshot"
 
 # =============================================================================
 # DATA MODELS
@@ -655,7 +660,7 @@ def check_password():
 
     def password_entered():
         """Checks whether a password entered by the user is correct."""
-        if st.session_state["password"] == APP_PASSWORD:
+        if st.session_state["password"] == get_app_password():
             st.session_state["password_correct"] = True
             del st.session_state["password"]
         else:
