@@ -113,14 +113,43 @@ class Rower:
         """Get all (distance, watts) pairs for Power Law fitting"""
         return [(score.distance, score.watts) for score in self.scores.values()]
 
-    def get_power_law_fit(self) -> Optional[Tuple[float, float]]:
-        """Fit Power Law to this rower's data. Returns (k, b) or None."""
-        data_points = self.get_power_law_data_points()
+    def get_two_closest_data_points(self, target_distance: int) -> List[Tuple[int, float]]:
+        """Get the two best data points for Power Law projection.
+
+        First preference: One point below and one above target (interpolation)
+        Second preference: Two closest points (extrapolation)
+        """
+        all_points = self.get_power_law_data_points()
+        if len(all_points) < 2:
+            return all_points
+
+        # Separate points into below and above target
+        below = [(d, w) for d, w in all_points if d < target_distance]
+        above = [(d, w) for d, w in all_points if d > target_distance]
+
+        # First preference: bracket the target (one below, one above)
+        if below and above:
+            # Get closest point from each side
+            closest_below = max(below, key=lambda p: p[0])  # Highest distance below target
+            closest_above = min(above, key=lambda p: p[0])  # Lowest distance above target
+            return [closest_below, closest_above]
+
+        # Second preference: two closest points (extrapolation)
+        sorted_points = sorted(all_points, key=lambda p: abs(p[0] - target_distance))
+        return sorted_points[:2]
+
+    def get_power_law_fit(self, target_distance: int = None) -> Optional[Tuple[float, float]]:
+        """Fit Power Law to this rower's data. Returns (k, b) or None.
+        If target_distance provided, uses only the two closest data points."""
+        if target_distance is not None:
+            data_points = self.get_two_closest_data_points(target_distance)
+        else:
+            data_points = self.get_power_law_data_points()
         return PhysicsEngine.fit_power_law(data_points)
 
     def project_split_power_law(self, target_distance: int) -> Optional[float]:
-        """Project split at target distance using Power Law fit."""
-        fit = self.get_power_law_fit()
+        """Project split at target distance using Power Law fit from two closest points."""
+        fit = self.get_power_law_fit(target_distance)
         if not fit:
             return None
         k, b = fit
@@ -1093,6 +1122,7 @@ class BoatAnalyzer:
                 continue
 
             # Use actual score if available at exact target distance
+            power_law_points = None
             if actual_score:
                 projected_split = actual_score.split_500m
                 projected_watts = actual_score.watts
@@ -1108,6 +1138,8 @@ class BoatAnalyzer:
                     if power_law_split and power_law_split > 0:
                         projected_split = power_law_split
                         projection_method = 'power_law'
+                        # Get the two points used for display
+                        power_law_points = rower.get_two_closest_data_points(target_distance)
                     else:
                         # Fall back to Paul's Law
                         projected_split = PhysicsEngine.pauls_law_projection(
@@ -1144,7 +1176,8 @@ class BoatAnalyzer:
                 'projected_split': projected_split,
                 'projected_watts': projected_watts,
                 'projection_method': projection_method,
-                'num_data_points': len(rower.scores)
+                'num_data_points': len(rower.scores),
+                'power_law_points': power_law_points
             })
 
         if not all_watts:
@@ -1916,11 +1949,17 @@ def main():
 
                                 # Format prediction method indicator
                                 method = proj.get('projection_method', 'pauls_law')
-                                num_pts = proj.get('num_data_points', 1)
+                                power_law_points = proj.get('power_law_points')
                                 if method == 'actual':
                                     method_str = "Actual"
+                                elif method == 'power_law' and power_law_points:
+                                    # Format the two distances used
+                                    def fmt_dist(d):
+                                        return f"{d//1000}K" if d >= 1000 else f"{d}m"
+                                    dists = sorted([p[0] for p in power_law_points])
+                                    method_str = f"Power({fmt_dist(dists[0])},{fmt_dist(dists[1])})"
                                 elif method == 'power_law':
-                                    method_str = f"Power({num_pts})"
+                                    method_str = "Power"
                                 else:
                                     method_str = "Paul's"
 
