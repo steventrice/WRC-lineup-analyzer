@@ -618,8 +618,11 @@ class BoatAnalyzer:
         self.roster = roster
 
     def analyze_lineup(self, rower_names: List[str], target_distance: int,
-                       boat_class: str = '4+') -> Dict[str, Any]:
-        """Analyze a lineup and return comprehensive results."""
+                       boat_class: str = '4+', calc_method: str = 'watts') -> Dict[str, Any]:
+        """Analyze a lineup and return comprehensive results.
+
+        calc_method: 'watts' (average watts, convert to split) or 'split' (average splits directly)
+        """
 
         if not rower_names:
             return {'error': 'No rowers in lineup'}
@@ -631,6 +634,7 @@ class BoatAnalyzer:
         port_watts = []
         starboard_watts = []
         all_watts = []
+        all_splits = []  # For split averaging method
 
         for seat_idx, name in enumerate(rower_names):
             rower = self.roster.get_rower(name)
@@ -669,6 +673,7 @@ class BoatAnalyzer:
                     starboard_watts.append(projected_watts)
 
             all_watts.append(projected_watts)
+            all_splits.append(projected_split)
 
             projections.append({
                 'rower': name,
@@ -689,8 +694,19 @@ class BoatAnalyzer:
                 'projections': projections
             }
 
+        # Calculate both methods
         avg_watts = statistics.mean(all_watts)
-        boat_split = PhysicsEngine.watts_to_split(avg_watts)
+        boat_split_watts = PhysicsEngine.watts_to_split(avg_watts)
+
+        avg_split = statistics.mean(all_splits)
+        boat_split_split = avg_split
+
+        # Use the selected method for primary results
+        if calc_method == 'watts':
+            boat_split = boat_split_watts
+        else:
+            boat_split = boat_split_split
+
         raw_time = (boat_split / 500) * target_distance
 
         side_balance_pct = None
@@ -711,8 +727,11 @@ class BoatAnalyzer:
             'projections': projections,
             'target_distance': target_distance,
             'boat_class': boat_class,
+            'calc_method': calc_method,
             'avg_watts': avg_watts,
             'boat_split_500m': boat_split,
+            'boat_split_watts_method': boat_split_watts,
+            'boat_split_split_method': boat_split_split,
             'raw_time': raw_time,
             'avg_age': avg_age,
             'handicap_seconds': handicap_seconds,
@@ -995,6 +1014,19 @@ def main():
         if st.button("Reload", type="secondary", use_container_width=True, help=f"Reload data from Google Sheets (loaded: {st.session_state.get('last_load_time', '?')})"):
             st.session_state.cache_version += 1
             st.rerun()
+
+    # Calculation method toggle
+    calc_col1, calc_col2 = st.columns([1, 5])
+    with calc_col1:
+        calc_method = st.radio(
+            "Calculation",
+            options=["Watts", "Split"],
+            horizontal=True,
+            help="""**Watts method**: Averages power (watts) then converts to split. Faster prediction, assumes perfect synchronization.
+
+**Split method**: Averages splits directly. More conservative, may better reflect real-world crew dynamics with varied abilities."""
+        )
+        calc_method = calc_method.lower()
 
     st.divider()
 
@@ -1320,7 +1352,7 @@ def main():
             rower_names_in_lineup = [r for r in lineup if r is not None]
 
             if rower_names_in_lineup:
-                result = analyzer.analyze_lineup(rower_names_in_lineup, target_distance, boat_class)
+                result = analyzer.analyze_lineup(rower_names_in_lineup, target_distance, boat_class, calc_method)
                 result['lineup_id'] = lineup_id
                 results.append(result)
 
