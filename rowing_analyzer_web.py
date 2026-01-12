@@ -22,12 +22,6 @@ try:
 except ImportError:
     GSPREAD_AVAILABLE = False
 
-# Live search component
-try:
-    from streamlit_searchbox import st_searchbox
-    SEARCHBOX_AVAILABLE = True
-except ImportError:
-    SEARCHBOX_AVAILABLE = False
 
 # =============================================================================
 # CONFIGURATION
@@ -1422,29 +1416,8 @@ def main():
         )
         sort_mode = sort_options[sort_mode]
 
-        # Search filter - live filtering as you type
-        if SEARCHBOX_AVAILABLE:
-            def search_rowers(search_text):
-                if not search_text:
-                    return []
-                search_lower = search_text.lower()
-                return [name for name in roster_manager.get_all_rowers()
-                        if search_lower in name.lower()]
-
-            search_result = st_searchbox(
-                search_rowers,
-                key="roster_search",
-                placeholder="Filter by name...",
-                clear_on_submit=False,
-                clearable=True
-            )
-            search_term = search_result if search_result else ""
-        else:
-            search_term = st.text_input(
-                "Search",
-                placeholder="Filter by name (Enter to search)...",
-                label_visibility="collapsed"
-            )
+        # Search filter
+        search_term = st.text_input("Search", key="search")
 
         # Get filtered rower list - show ALL rowers, not just those with scores
         if selected_regatta and selected_regatta != "__all__":

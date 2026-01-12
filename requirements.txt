@@ -5,4 +5,3 @@ rich>=13.0.0
 streamlit>=1.30.0
 gspread>=5.10.0
 google-auth>=2.20.0
-streamlit-searchbox>=0.1.0
