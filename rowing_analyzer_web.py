@@ -925,13 +925,25 @@ class RosterManager:
         df = xl.parse(sheet_name)
         self.log(f"Loading misc maxes from '{sheet_name}', columns: {list(df.columns)}")
 
-        # Define the test columns and their distances
-        # For 2' test, distance will be calculated from split
-        test_columns = {
-            "Avg. Split (100m Test)": 100,
-            "Avg. Split (250m Test)": 250,
-            "Avg. Split (2' Test)": '2min',
-        }
+        # Define test patterns and their distances
+        # Use patterns to match various apostrophe characters (', ', ′)
+        test_patterns = [
+            (r"100\s*m", 100),
+            (r"250\s*m", 250),
+            (r"2\s*['''′`]\s*(Test|min)?", '2min'),
+        ]
+
+        # Find matching columns
+        test_columns = {}
+        for col in df.columns:
+            col_lower = str(col).lower()
+            if 'split' not in col_lower:
+                continue
+            for pattern, distance in test_patterns:
+                if re.search(pattern, col, re.IGNORECASE):
+                    test_columns[col] = distance
+                    self.log(f"  Matched column '{col}' as {distance} test")
+                    break
 
         scores_loaded = 0
         fuzzy_matches = 0
