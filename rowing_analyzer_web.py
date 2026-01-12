@@ -9,6 +9,8 @@ import pandas as pd
 import numpy as np
 import math
 import statistics
+import hashlib
+from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
 from pathlib import Path
@@ -21,6 +23,13 @@ try:
     GSPREAD_AVAILABLE = True
 except ImportError:
     GSPREAD_AVAILABLE = False
+
+# Cookie manager for "Remember me" functionality
+try:
+    import extra_streamlit_components as stx
+    COOKIES_AVAILABLE = True
+except ImportError:
+    COOKIES_AVAILABLE = False
 
 
 # =============================================================================
@@ -1226,13 +1235,44 @@ def format_split(seconds: float) -> str:
 # STREAMLIT APP
 # =============================================================================
 
+def get_auth_token():
+    """Generate auth token from password for cookie storage."""
+    password = get_app_password()
+    # Create a hash of the password - not super secure but fine for this use case
+    return hashlib.sha256(f"wrc_lineup_{password}".encode()).hexdigest()[:32]
+
+
 def check_password():
     """Returns True if the user has the correct password."""
+
+    # Try to use cookie manager for "Remember me" functionality
+    cookie_manager = None
+    if COOKIES_AVAILABLE:
+        try:
+            cookie_manager = stx.CookieManager()
+        except Exception:
+            cookie_manager = None
+
+    # Check for existing auth cookie
+    if cookie_manager:
+        try:
+            auth_cookie = cookie_manager.get("wrc_auth")
+            if auth_cookie == get_auth_token():
+                st.session_state["password_correct"] = True
+        except Exception:
+            pass
 
     def password_entered():
         """Checks whether a password entered by the user is correct."""
         if st.session_state["password"] == get_app_password():
             st.session_state["password_correct"] = True
+            # Set cookie if "Remember me" is checked
+            if cookie_manager and st.session_state.get("remember_me", False):
+                try:
+                    cookie_manager.set("wrc_auth", get_auth_token(),
+                                       expires_at=datetime.now() + timedelta(days=30))
+                except Exception:
+                    pass
             del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
@@ -1249,6 +1289,8 @@ def check_password():
             on_change=password_entered,
             key="password"
         )
+        if COOKIES_AVAILABLE and cookie_manager:
+            st.checkbox("Remember me", key="remember_me")
         st.info("Contact your team leadership for access credentials.")
         return False
 
@@ -1264,6 +1306,8 @@ def check_password():
             on_change=password_entered,
             key="password"
         )
+        if COOKIES_AVAILABLE and cookie_manager:
+            st.checkbox("Remember me", key="remember_me")
         st.error("Incorrect password. Please try again.")
         return False
 
