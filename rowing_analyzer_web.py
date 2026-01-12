@@ -1264,6 +1264,9 @@ def check_password():
 
     def password_entered():
         """Checks whether a password entered by the user is correct."""
+        # Check if password key exists (may not during cookie-triggered reruns)
+        if "password" not in st.session_state:
+            return
         if st.session_state["password"] == get_app_password():
             st.session_state["password_correct"] = True
             # Set cookie if "Remember me" is checked
