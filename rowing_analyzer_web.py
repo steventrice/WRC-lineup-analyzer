@@ -729,6 +729,10 @@ class RosterManager:
         for sheet_name, distance in short_test_sheets:
             self._load_short_test_scores(xl, sheet_name, distance)
 
+        # Load misc maxes sheet (contains 100m, 250m, 2' test columns)
+        if '2025 Misc Maxes' in xl.sheet_names:
+            self._load_misc_maxes(xl, '2025 Misc Maxes')
+
     def _load_scores_from_sheet(self, xl: pd.ExcelFile, sheet_name: str, distance: int):
         """Load scores from a specific score sheet"""
         df = xl.parse(sheet_name)
@@ -910,6 +914,82 @@ class RosterManager:
 
             rower.add_score(score)
             scores_loaded += 1
+
+        log_msg = f"Loaded {scores_loaded} scores from '{sheet_name}'"
+        if fuzzy_matches > 0:
+            log_msg += f" ({fuzzy_matches} fuzzy matched)"
+        self.log(log_msg)
+
+    def _load_misc_maxes(self, xl: pd.ExcelFile, sheet_name: str):
+        """Load scores from misc maxes sheet with split columns for 100m, 250m, 2' tests"""
+        df = xl.parse(sheet_name)
+        self.log(f"Loading misc maxes from '{sheet_name}', columns: {list(df.columns)}")
+
+        # Define the test columns and their distances
+        # For 2' test, distance will be calculated from split
+        test_columns = {
+            "Avg. Split (100m Test)": 100,
+            "Avg. Split (250m Test)": 250,
+            "Avg. Split (2' Test)": '2min',
+        }
+
+        scores_loaded = 0
+        fuzzy_matches = 0
+
+        for _, row in df.iterrows():
+            name = str(row.get('Name', '')).strip()
+            if not name or name == 'nan':
+                continue
+
+            # Use fuzzy matching to find rower
+            canonical_name = self.find_rower(name)
+            if not canonical_name:
+                continue
+
+            if canonical_name != name:
+                fuzzy_matches += 1
+
+            rower = self.rowers[canonical_name]
+
+            # Process each test column
+            for col_name, distance_or_type in test_columns.items():
+                if col_name not in df.columns:
+                    continue
+
+                split_val = row.get(col_name)
+                if pd.isna(split_val) or str(split_val).strip() == '':
+                    continue
+
+                # Parse the split time
+                split_500m = TimeParser.parse_split(split_val)
+                if not split_500m or split_500m < 60 or split_500m > 200:
+                    continue
+
+                # Calculate distance and time based on test type
+                if distance_or_type == '2min':
+                    # For 2' test: time is 120 seconds, calculate distance from split
+                    # pace = split / 500 (seconds per meter)
+                    # distance = time / pace = 120 / (split / 500) = 60000 / split
+                    time_seconds = 120.0
+                    distance = int(60000 / split_500m)
+                else:
+                    # Fixed distance test (100m, 250m)
+                    distance = distance_or_type
+                    # time = distance * (split / 500)
+                    time_seconds = distance * (split_500m / 500)
+
+                watts = PhysicsEngine.split_to_watts(split_500m)
+
+                score = Score(
+                    distance=distance,
+                    time_seconds=time_seconds,
+                    split_500m=split_500m,
+                    watts=watts,
+                    source_sheet=sheet_name
+                )
+
+                rower.add_score(score)
+                scores_loaded += 1
 
         log_msg = f"Loaded {scores_loaded} scores from '{sheet_name}'"
         if fuzzy_matches > 0:
