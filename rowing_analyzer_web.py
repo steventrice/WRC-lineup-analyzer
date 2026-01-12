@@ -14,6 +14,14 @@ from typing import Dict, List, Optional, Tuple, Any
 from pathlib import Path
 import re
 
+# Google Sheets integration
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    GSPREAD_AVAILABLE = True
+except ImportError:
+    GSPREAD_AVAILABLE = False
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -256,6 +264,57 @@ class RosterManager:
 
         except Exception as e:
             self.log(f"ERROR: {e}")
+            return False
+
+    def load_from_google_sheets(self, spreadsheet_id: str, credentials_dict: dict) -> bool:
+        """Load all data from a Google Sheet"""
+        try:
+            if not GSPREAD_AVAILABLE:
+                self.log("ERROR: gspread not installed")
+                return False
+
+            self.log(f"Loading from Google Sheets: {spreadsheet_id}")
+
+            # Authenticate with Google
+            scopes = [
+                'https://www.googleapis.com/auth/spreadsheets.readonly',
+                'https://www.googleapis.com/auth/drive.readonly'
+            ]
+            creds = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
+            client = gspread.authorize(creds)
+
+            # Open the spreadsheet
+            spreadsheet = client.open_by_key(spreadsheet_id)
+            self.log(f"Opened spreadsheet: {spreadsheet.title}")
+
+            # Create a wrapper that mimics pd.ExcelFile behavior
+            class GoogleSheetsWrapper:
+                def __init__(self, spreadsheet):
+                    self._spreadsheet = spreadsheet
+                    self.sheet_names = [ws.title for ws in spreadsheet.worksheets()]
+
+                def parse(self, sheet_name):
+                    worksheet = self._spreadsheet.worksheet(sheet_name)
+                    data = worksheet.get_all_values()
+                    if not data:
+                        return pd.DataFrame()
+                    # First row is headers
+                    headers = data[0]
+                    rows = data[1:]
+                    return pd.DataFrame(rows, columns=headers)
+
+            gs_wrapper = GoogleSheetsWrapper(spreadsheet)
+            self.log(f"Available sheets: {gs_wrapper.sheet_names}")
+
+            self._load_roster(gs_wrapper)
+            self._load_regatta_signups(gs_wrapper)
+            self._load_score_sheets(gs_wrapper)
+
+            self.log(f"Loaded {len(self.rowers)} rowers total from Google Sheets")
+            return True
+
+        except Exception as e:
+            self.log(f"ERROR loading from Google Sheets: {e}")
             return False
 
     def _load_roster(self, xl: pd.ExcelFile):
@@ -699,21 +758,42 @@ def check_password():
     return True
 
 
-@st.cache_resource
+def get_google_sheets_config():
+    """Get Google Sheets configuration from Streamlit secrets"""
+    try:
+        # Check if Google Sheets is configured
+        if "gcp_service_account" not in st.secrets:
+            return None, None
+        if "spreadsheet_id" not in st.secrets:
+            return None, None
+
+        credentials = dict(st.secrets["gcp_service_account"])
+        spreadsheet_id = st.secrets["spreadsheet_id"]
+        return credentials, spreadsheet_id
+    except Exception:
+        return None, None
+
+
+@st.cache_resource(ttl=300)  # Cache for 5 minutes, then refresh from Google Sheets
 def load_data():
-    """Load data from Excel file (cached)"""
+    """Load data from Google Sheets (preferred) or local Excel file (fallback)"""
     roster_manager = RosterManager()
+
+    # Try Google Sheets first
+    credentials, spreadsheet_id = get_google_sheets_config()
+    if credentials and spreadsheet_id and GSPREAD_AVAILABLE:
+        success = roster_manager.load_from_google_sheets(spreadsheet_id, credentials)
+        if success:
+            return roster_manager, None, "google_sheets"
+
+    # Fall back to local Excel file
     filepath = Path("2026 WRC Racing Spreadsheet.xlsx")
+    if filepath.exists():
+        success = roster_manager.load_from_excel(str(filepath))
+        if success:
+            return roster_manager, None, "local_excel"
 
-    if not filepath.exists():
-        return None, "Excel file not found"
-
-    success = roster_manager.load_from_excel(str(filepath))
-
-    if success:
-        return roster_manager, None
-    else:
-        return None, "Failed to load data"
+    return None, "No data source available. Configure Google Sheets or add local Excel file.", None
 
 
 def get_seat_labels(num_seats: int) -> List[str]:
@@ -739,13 +819,17 @@ def main():
         return
 
     # Load data
-    roster_manager, error = load_data()
+    roster_manager, error, data_source = load_data()
 
     if error:
         st.error(f"Error: {error}")
         return
 
     analyzer = BoatAnalyzer(roster_manager)
+
+    # Store data source for display
+    if 'data_source' not in st.session_state:
+        st.session_state.data_source = data_source
 
     # Initialize session state for lineups
     if 'lineup_a' not in st.session_state:

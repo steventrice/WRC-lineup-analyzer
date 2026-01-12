@@ -3,3 +3,5 @@ openpyxl>=3.1.0
 textual>=0.40.0
 rich>=13.0.0
 streamlit>=1.30.0
+gspread>=5.10.0
+google-auth>=2.20.0
