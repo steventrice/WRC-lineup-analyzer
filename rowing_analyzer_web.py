@@ -453,6 +453,9 @@ class RosterManager:
         self.regattas = regatta_cols
         self.regatta_display_names = regatta_display_names
         self.log(f"Selected {len(regatta_cols)} regatta columns")
+        for col in regatta_cols:
+            display = regatta_display_names.get(col, col)
+            self.log(f"  Regatta '{display}' uses column: '{col}'")
 
         signups_loaded = 0
         for _, row in df.iterrows():
@@ -867,6 +870,11 @@ def main():
 
     # Store load time for display
     st.session_state.last_load_time = load_time
+
+    # Debug: show load log in expander
+    with st.expander("Debug: Data Load Log", expanded=False):
+        for log_entry in roster_manager.load_log:
+            st.text(log_entry)
 
     analyzer = BoatAnalyzer(roster_manager)
 
