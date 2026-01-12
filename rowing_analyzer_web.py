@@ -513,21 +513,42 @@ class RosterManager:
 
             rower = self.rowers[name]
 
-            time_seconds = None
+            # Collect all valid times from this row
+            times_to_try = []
 
+            # Check for direct time in seconds columns
             for col in ['Time in Seconds', 'Time in Secs', 'Total Time']:
                 if col in row.index and pd.notna(row[col]):
                     val = row[col]
-                    if isinstance(val, (int, float)) and val > 0:
-                        time_seconds = float(val)
-                        break
+                    # Handle both numeric and string values (Google Sheets returns strings)
+                    try:
+                        time_val = float(val) if not isinstance(val, (int, float)) else val
+                        if time_val > 0:
+                            times_to_try.append(time_val)
+                    except (ValueError, TypeError):
+                        pass
 
-            if not time_seconds:
-                for col in ['1K Time', '5K Time', 'Time']:
-                    if col in row.index and pd.notna(row[col]):
-                        time_seconds = TimeParser.parse(row[col])
-                        if time_seconds:
-                            break
+            # Check for individual time columns (1K Time #1, #2, #3)
+            for col in row.index:
+                col_str = str(col)
+                if 'Time #' in col_str or 'Time#' in col_str:
+                    if pd.notna(row[col]):
+                        parsed = TimeParser.parse(row[col])
+                        if parsed and parsed > 0:
+                            times_to_try.append(parsed)
+
+            # Check for named time columns
+            for col in ['1K Time', '5K Time', 'Time']:
+                if col in row.index and pd.notna(row[col]):
+                    parsed = TimeParser.parse(row[col])
+                    if parsed and parsed > 0:
+                        times_to_try.append(parsed)
+
+            # Use the fastest (minimum) time from all found times
+            if not times_to_try:
+                continue
+
+            time_seconds = min(times_to_try)
 
             split_500m = None
             for col in ['Avg. Split', 'Avg Split', 'Split', '500m Split']:
