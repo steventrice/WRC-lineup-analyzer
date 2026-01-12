@@ -26,3 +26,7 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+NUL
+
+# Claude
+.claude/
