@@ -915,6 +915,18 @@ def main():
     # Store load time for display
     st.session_state.last_load_time = load_time
 
+    # Debug: show load log in expander
+    with st.expander("Debug: Data Load Log", expanded=False):
+        for log_entry in roster_manager.load_log:
+            st.text(log_entry)
+
+        # Show rowers without scores
+        rowers_without_scores = [name for name, r in roster_manager.rowers.items() if not r.scores]
+        if rowers_without_scores:
+            st.text(f"\nRowers WITHOUT scores ({len(rowers_without_scores)}):")
+            for name in sorted(rowers_without_scores):
+                st.text(f"  - {name}")
+
     analyzer = BoatAnalyzer(roster_manager)
 
     # Store data source for display
