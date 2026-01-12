@@ -1355,6 +1355,25 @@ def main():
         layout="wide"
     )
 
+    # Hide tooltips on selectbox options
+    st.markdown("""
+        <style>
+        div[data-baseweb="select"] * {
+            pointer-events: auto !important;
+        }
+        div[data-baseweb="select"] [title] {
+            title: none !important;
+        }
+        div[data-baseweb="select"] *::after {
+            content: none !important;
+        }
+        /* Disable browser native tooltips */
+        [title] {
+            pointer-events: auto;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
     # Check password first
     if not check_password():
         return
