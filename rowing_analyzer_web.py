@@ -423,7 +423,11 @@ class RosterManager:
                 base_name = re.sub(r',\s*[A-Z]{2}\b', '', base_name)
                 base_name = re.sub(r'\*$', '', base_name).strip()
 
-                col_values = df[col].dropna().astype(str).str.lower().unique()
+                # Handle duplicate column names - df[col] might return DataFrame
+                col_data = df[col]
+                if isinstance(col_data, pd.DataFrame):
+                    col_data = col_data.iloc[:, 0]  # Take first column if duplicates
+                col_values = col_data.dropna().astype(str).str.lower().unique()
                 has_yes = any('yes' in str(v) for v in col_values)
 
                 if base_name not in regatta_candidates:
@@ -464,6 +468,9 @@ class RosterManager:
 
             for regatta in regatta_cols:
                 val = row.get(regatta, '')
+                # Handle duplicate columns - val might be a Series
+                if isinstance(val, pd.Series):
+                    val = val.iloc[0]
                 val_str = str(val).strip().lower() if pd.notna(val) else ''
                 is_attending = bool(val_str) and val_str not in ['no', 'n', 'false', '0', '', 'nan']
                 rower.regatta_signups[regatta] = is_attending
