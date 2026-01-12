@@ -820,8 +820,8 @@ def _load_data_impl():
 
 
 @st.cache_resource(ttl=300)  # Cache for 5 minutes, then refresh from Google Sheets
-def load_data():
-    """Cached wrapper - only caches successful loads"""
+def load_data(_cache_version: int = 0):
+    """Cached wrapper - pass different _cache_version to force refresh"""
     result = _load_data_impl()
     if result[0] is None:
         # Don't cache failures - clear and return
@@ -852,8 +852,12 @@ def main():
     if not check_password():
         return
 
-    # Load data
-    roster_manager, error, data_source = load_data()
+    # Initialize cache version for refresh functionality
+    if 'cache_version' not in st.session_state:
+        st.session_state.cache_version = 0
+
+    # Load data (pass cache_version to force refresh when incremented)
+    roster_manager, error, data_source = load_data(st.session_state.cache_version)
 
     if error:
         st.error(f"Error: {error}")
@@ -881,7 +885,7 @@ def main():
     # HEADER: Logo, Title, and Configuration
     # =========================================================================
 
-    header_cols = st.columns([1, 3, 1, 2, 2, 2, 2, 2])
+    header_cols = st.columns([1, 4, 2, 2, 2, 2, 2, 2])
 
     with header_cols[0]:
         st.image("wrc-badge-red.png", width=50)
@@ -889,28 +893,24 @@ def main():
     with header_cols[1]:
         st.markdown("### Lineup Comparison")
 
-    with header_cols[2]:
-        if st.button("🔄", help="Refresh data from Google Sheets"):
-            st.cache_resource.clear()
-            st.rerun()
-
     # Regatta selection
     regatta_options = {"All Rowers": "__all__"}
     for col in roster_manager.regattas:
         display = roster_manager.regatta_display_names.get(col, col)
         regatta_options[display] = col
 
-    with header_cols[3]:
+    with header_cols[2]:
         selected_regatta_display = st.selectbox(
             "Regatta",
             options=list(regatta_options.keys()),
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            key=f"regatta_select_{st.session_state.cache_version}"  # Reset on refresh
         )
-        selected_regatta = regatta_options[selected_regatta_display]
+        selected_regatta = regatta_options.get(selected_regatta_display, "__all__")
 
     # Distance selection
     distance_options = {"1K": 1000, "2K": 2000, "5K": 5000}
-    with header_cols[4]:
+    with header_cols[3]:
         selected_distance_display = st.selectbox(
             "Distance",
             options=list(distance_options.keys()),
@@ -920,7 +920,7 @@ def main():
 
     # Boat class selection
     boat_options = {"1x": "1x", "2x": "2x", "2-": "2-", "4x": "4x", "4+": "4+", "4-": "4-", "8+": "8+"}
-    with header_cols[5]:
+    with header_cols[4]:
         boat_class = st.selectbox(
             "Boat",
             options=list(boat_options.keys()),
@@ -941,16 +941,21 @@ def main():
                 new_lineup[i] = current[i]
             st.session_state[lineup_key] = new_lineup
 
-    with header_cols[6]:
+    with header_cols[5]:
         if st.button("Analyze", type="primary", use_container_width=True):
             st.session_state.analyze_clicked = True
 
-    with header_cols[7]:
+    with header_cols[6]:
         if st.button("Clear All", type="secondary", use_container_width=True):
             st.session_state.lineup_a = [None] * num_seats
             st.session_state.lineup_b = [None] * num_seats
             st.session_state.lineup_c = [None] * num_seats
             st.session_state.selected_rower = None
+            st.rerun()
+
+    with header_cols[7]:
+        if st.button("Reload", type="secondary", use_container_width=True, help="Reload data from Google Sheets"):
+            st.session_state.cache_version += 1
             st.rerun()
 
     st.divider()
