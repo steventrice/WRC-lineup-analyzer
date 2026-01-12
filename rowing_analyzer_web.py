@@ -585,6 +585,16 @@ class RosterManager:
 
         self.log(f"Loaded {scores_loaded} scores from '{sheet_name}'")
 
+        # Log names in score sheet that don't match roster
+        unmatched_names = []
+        for _, row in df.iterrows():
+            name = str(row.get('Name', '')).strip()
+            if name and name != 'nan' and name not in self.rowers:
+                if name not in unmatched_names:
+                    unmatched_names.append(name)
+        if unmatched_names:
+            self.log(f"  Unmatched names in '{sheet_name}': {unmatched_names[:10]}")
+
     def get_rower(self, name: str) -> Optional[Rower]:
         return self.rowers.get(name)
 
