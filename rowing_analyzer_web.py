@@ -1242,23 +1242,29 @@ def get_auth_token():
     return hashlib.sha256(f"wrc_lineup_{password}".encode()).hexdigest()[:32]
 
 
+@st.cache_resource
+def get_cookie_manager():
+    """Get a cached cookie manager instance."""
+    if COOKIES_AVAILABLE:
+        try:
+            return stx.CookieManager(key="wrc_cookies")
+        except Exception:
+            return None
+    return None
+
+
 def check_password():
     """Returns True if the user has the correct password."""
 
-    # Try to use cookie manager for "Remember me" functionality
-    cookie_manager = None
-    if COOKIES_AVAILABLE:
-        try:
-            cookie_manager = stx.CookieManager()
-        except Exception:
-            cookie_manager = None
+    cookie_manager = get_cookie_manager()
 
     # Check for existing auth cookie
-    if cookie_manager:
+    if cookie_manager and "password_correct" not in st.session_state:
         try:
             auth_cookie = cookie_manager.get("wrc_auth")
             if auth_cookie == get_auth_token():
                 st.session_state["password_correct"] = True
+                return True
         except Exception:
             pass
 
@@ -1269,16 +1275,19 @@ def check_password():
             return
         if st.session_state["password"] == get_app_password():
             st.session_state["password_correct"] = True
-            # Set cookie if "Remember me" is checked
-            if cookie_manager and st.session_state.get("remember_me", False):
-                try:
-                    cookie_manager.set("wrc_auth", get_auth_token(),
-                                       expires_at=datetime.now() + timedelta(days=30))
-                except Exception:
-                    pass
+            st.session_state["set_cookie"] = st.session_state.get("remember_me", False)
             del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
+
+    # Set cookie after successful login (needs to happen outside callback)
+    if cookie_manager and st.session_state.get("set_cookie", False):
+        try:
+            cookie_manager.set("wrc_auth", get_auth_token(),
+                               expires_at=datetime.now() + timedelta(days=30))
+            st.session_state["set_cookie"] = False
+        except Exception:
+            pass
 
     if "password_correct" not in st.session_state:
         col_logo, col_title = st.columns([1, 10])
@@ -1292,9 +1301,9 @@ def check_password():
             on_change=password_entered,
             key="password"
         )
-        if COOKIES_AVAILABLE and cookie_manager:
+        if cookie_manager:
             st.checkbox("Remember me", key="remember_me")
-        st.info("Contact your team leadership for access credentials.")
+        st.info("Contact WRC leadership for access credentials.")
         return False
 
     if not st.session_state["password_correct"]:
@@ -1309,7 +1318,7 @@ def check_password():
             on_change=password_entered,
             key="password"
         )
-        if COOKIES_AVAILABLE and cookie_manager:
+        if cookie_manager:
             st.checkbox("Remember me", key="remember_me")
         st.error("Incorrect password. Please try again.")
         return False
