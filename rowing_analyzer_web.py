@@ -820,8 +820,8 @@ def _load_data_impl():
 
 
 @st.cache_resource(ttl=300)  # Cache for 5 minutes, then refresh from Google Sheets
-def load_data(_cache_version: int = 0):
-    """Cached wrapper - pass different _cache_version to force refresh"""
+def load_data(cache_version: int = 0):
+    """Cached wrapper - pass different cache_version to force refresh"""
     result = _load_data_impl()
     if result[0] is None:
         # Don't cache failures - clear and return
