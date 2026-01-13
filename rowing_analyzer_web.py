@@ -5,11 +5,13 @@ Analyzes potential boat lineups using Paul's Law and boat physics
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import math
 import statistics
 import io
+import html
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
 from pathlib import Path
@@ -2035,7 +2037,7 @@ def main():
                 )
 
             with export_col2:
-                # Copy to clipboard - create tab-separated text
+                # Copy to clipboard - create tab-separated text for easy pasting
                 clipboard_text = df.to_csv(sep='\t', index=False)
 
                 # Add detailed projections
@@ -2054,23 +2056,36 @@ def main():
                         if proj_rows:
                             clipboard_text += pd.DataFrame(proj_rows).to_csv(sep='\t', index=False)
 
-                # Use JavaScript to copy to clipboard
-                copy_button_id = "copy_btn_" + str(hash(clipboard_text))[:8]
-                st.markdown(f'''
-                    <button id="{copy_button_id}" style="
+                # Escape text for safe JavaScript embedding
+                escaped_text = html.escape(clipboard_text).replace('\n', '\\n').replace('\r', '').replace("'", "\\'")
+
+                # Copy to clipboard using components.html (executes JavaScript properly)
+                components.html(f"""
+                    <button onclick="
+                        navigator.clipboard.writeText('{escaped_text}'.replace(/\\\\n/g, '\\n')).then(() => {{
+                            this.innerText = 'Copied!';
+                            this.style.background = '#28a745';
+                            setTimeout(() => {{
+                                this.innerText = 'Copy to Clipboard';
+                                this.style.background = '#f0f2f6';
+                            }}, 2000);
+                        }}).catch(err => {{
+                            this.innerText = 'Failed';
+                            this.style.background = '#dc3545';
+                        }});
+                    " style="
                         width: 100%;
                         padding: 0.5rem 1rem;
-                        background-color: #f0f2f6;
-                        border: 1px solid #e0e0e0;
-                        border-radius: 0.5rem;
-                        cursor: pointer;
                         font-size: 14px;
-                    " onclick="
-                        navigator.clipboard.writeText(`{clipboard_text.replace('`', "'")}`);
-                        this.textContent = 'Copied!';
-                        setTimeout(() => this.textContent = 'Copy to Clipboard', 2000);
+                        font-weight: 400;
+                        cursor: pointer;
+                        border-radius: 8px;
+                        border: 1px solid #e0e0e0;
+                        background: #f0f2f6;
+                        color: #262730;
+                        transition: all 0.2s;
                     ">Copy to Clipboard</button>
-                ''', unsafe_allow_html=True)
+                """, height=45)
 
         else:
             st.info("No lineups to analyze. Add rowers to at least one lineup.")
