@@ -12,6 +12,8 @@ import math
 import statistics
 import io
 import html
+import json
+import base64
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
 from pathlib import Path
@@ -1337,6 +1339,62 @@ def format_split(seconds: float) -> str:
     return f"{mins}:{secs:04.1f}"
 
 
+def get_last_name_abbrev(full_name: str, length: int = 4) -> str:
+    """Extract and abbreviate last name from full name.
+
+    Args:
+        full_name: Full name like "John Smith" or "Smith, John"
+        length: Number of characters to abbreviate to (default 4)
+
+    Returns:
+        Abbreviated last name in uppercase, e.g., "SMIT"
+    """
+    if not full_name:
+        return "????"
+
+    # Handle "Last, First" format
+    if ',' in full_name:
+        last_name = full_name.split(',')[0].strip()
+    else:
+        # Handle "First Last" format - take the last word
+        parts = full_name.strip().split()
+        last_name = parts[-1] if parts else full_name
+
+    return last_name[:length].upper()
+
+
+def format_lineup_display(lineup_id: str, rower_names: List[str], boat_class: str) -> str:
+    """Format lineup display name with rower last names.
+
+    Args:
+        lineup_id: Original lineup ID ("A", "B", "C")
+        rower_names: List of rower names in seat order (stroke first, bow last)
+        boat_class: Boat class like "2x", "4+", "8+"
+
+    Returns:
+        Formatted string like "A - SMIT / JONE" for pairs or "A - SMIT" for larger boats
+    """
+    if not rower_names:
+        return lineup_id
+
+    # Get number of seats from boat class
+    num_seats = len(rower_names)
+
+    # For 1x - just show the single rower
+    if num_seats == 1:
+        return f"{lineup_id} - {get_last_name_abbrev(rower_names[0])}"
+
+    # For 2x/2- - show "stroke / bow" format
+    if num_seats == 2:
+        stroke = get_last_name_abbrev(rower_names[0])
+        bow = get_last_name_abbrev(rower_names[1])
+        return f"{lineup_id} - {stroke}/{bow}"
+
+    # For larger boats (4+, 4-, 4x, 8+) - just show stroke's last name
+    stroke = get_last_name_abbrev(rower_names[0])
+    return f"{lineup_id} - {stroke}"
+
+
 # =============================================================================
 # STREAMLIT APP
 # =============================================================================
@@ -1876,20 +1934,34 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
 
     # Helper to calculate lineup stats
     def get_lineup_stats(lineup_list, roster_mgr):
-        """Calculate average age and category for a full lineup"""
+        """Calculate average age, category, and gender for a full lineup"""
         rower_names = [r for r in lineup_list if r is not None]
         if len(rower_names) != len(lineup_list):
             return None  # Not full
         ages = []
+        genders = set()
         for name in rower_names:
             rower = roster_mgr.get_rower(name)
             if rower:
                 ages.append(rower.age)
+                if rower.gender:
+                    g = rower.gender.upper()
+                    # Convert 'F' (Female) to 'W' (Women) for rowing convention
+                    if g == 'F':
+                        g = 'W'
+                    genders.add(g)
         if not ages:
             return None
         avg_age = sum(ages) / len(ages)
         category = get_masters_category(avg_age)
-        return (avg_age, category)
+        # Determine gender: M, W, or Mix
+        if len(genders) == 1:
+            gender = genders.pop()
+        elif len(genders) > 1:
+            gender = 'Mix'
+        else:
+            gender = 'M'  # Default
+        return (avg_age, category, gender)
 
     # Three columns for lineups
     lineup_cols = st.columns(3)
@@ -1905,8 +1977,9 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
             lineup = st.session_state[key]
             stats = get_lineup_stats(lineup, roster_manager)
             if stats:
-                avg_age, category = stats
-                st.markdown(f"**{title}** :gray[Avg: {avg_age:.1f} | Cat: {category}]")
+                avg_age, category, gender = stats
+                gender_prefix = {"M": "Men's", "W": "Women's", "Mix": "Mixed"}.get(gender, "")
+                st.markdown(f"**{title}** :gray[Avg: {avg_age:.1f} | Cat: {gender_prefix} {category}]")
             else:
                 st.markdown(f"**{title}**")
 
@@ -1980,7 +2053,11 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
             for name in rower_names:
                 rower = roster_manager.get_rower(name)
                 if rower:
-                    genders.add(rower.gender.upper() if rower.gender else 'M')
+                    g = rower.gender.upper() if rower.gender else 'M'
+                    # Convert 'F' (Female) to 'W' (Women) for rowing convention
+                    if g == 'F':
+                        g = 'W'
+                    genders.add(g)
             if len(genders) == 1:
                 return genders.pop()
             elif len(genders) > 1:
@@ -1994,6 +2071,9 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
             if rower_names_in_lineup:
                 result = analyzer.analyze_lineup(rower_names_in_lineup, target_distance, boat_class, calc_method, pace_predictor)
                 result['lineup_id'] = lineup_id
+                # Store rower names for display formatting
+                result['rower_names'] = rower_names_in_lineup
+                result['lineup_display'] = format_lineup_display(lineup_id, rower_names_in_lineup, boat_class)
                 # Store lineup gender for erg-to-water conversion
                 result['lineup_gender'] = get_lineup_gender(rower_names_in_lineup)
                 results.append(result)
@@ -2013,7 +2093,7 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                 if 'error' in result and 'avg_watts' not in result:
                     table_data.append({
                         'Place': '-',
-                        'Lineup': result['lineup_id'],
+                        'Lineup': result.get('lineup_display', result['lineup_id']),
                         'Rowers': '-',
                         'Split': 'ERROR',
                         'Raw Time': result.get('error', 'Unknown'),
@@ -2052,7 +2132,7 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
 
                     table_data.append({
                         'Place': str(place),
-                        'Lineup': result['lineup_id'],
+                        'Lineup': result.get('lineup_display', result['lineup_id']),
                         'Rowers': str(result['rower_count']),
                         'Split': format_split(split_500m),
                         'Raw Time': format_time(raw_time),
@@ -2068,8 +2148,31 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
 
             # Show indicator when erg-to-water conversion is active
             if erg_to_water:
-                boat_factor = get_boat_factor(boat_class, 'Mix' if boat_class.lower().startswith('mix') else None)
-                st.caption(f"*On-Water Projection Mode* | Boat Factor: {boat_factor:.2f} | Tech Efficiency: {DEFAULT_TECH_EFFICIENCY:.2f}")
+                boat_type = boat_class[3:] if boat_class.lower().startswith('mix') else boat_class
+
+                if boat_class.lower().startswith('mix'):
+                    # Mixed boat class - show averaged factor
+                    boat_factor = get_boat_factor(boat_type, 'Mix')
+                    st.caption(f"*On-Water Projection Mode* | Mixed {boat_class} Factor: {boat_factor:.2f} | Tech Efficiency: {DEFAULT_TECH_EFFICIENCY:.2f}")
+                else:
+                    # Get unique genders from all lineups
+                    lineup_genders = set(r.get('lineup_gender', 'M') for r in results if 'lineup_gender' in r)
+
+                    if len(lineup_genders) == 1:
+                        # All lineups same gender
+                        gender = lineup_genders.pop()
+                        boat_factor = get_boat_factor(boat_type, gender)
+                        gender_label = 'Men' if gender == 'M' else 'Women'
+                        st.caption(f"*On-Water Projection Mode* | {gender_label} {boat_class} Factor: {boat_factor:.2f} | Tech Efficiency: {DEFAULT_TECH_EFFICIENCY:.2f}")
+                    elif 'M' in lineup_genders and 'W' in lineup_genders:
+                        # Comparing men vs women - show both factors
+                        men_factor = get_boat_factor(boat_type, 'M')
+                        women_factor = get_boat_factor(boat_type, 'W')
+                        st.caption(f"*On-Water Projection Mode* | Men {boat_class}: {men_factor:.2f} / Women {boat_class}: {women_factor:.2f} | Tech Efficiency: {DEFAULT_TECH_EFFICIENCY:.2f}")
+                    else:
+                        # Default fallback
+                        boat_factor = get_boat_factor(boat_type, 'M')
+                        st.caption(f"*On-Water Projection Mode* | {boat_class} Factor: {boat_factor:.2f} | Tech Efficiency: {DEFAULT_TECH_EFFICIENCY:.2f}")
 
             st.dataframe(df, use_container_width=True, hide_index=True)
 
@@ -2077,7 +2180,7 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
             with st.expander("View Detailed Projections"):
                 for result in results:
                     if 'projections' in result:
-                        st.markdown(f"**Lineup {result['lineup_id']}**")
+                        st.markdown(f"**Lineup {result.get('lineup_display', result['lineup_id'])}**")
                         proj_data = []
 
                         # Determine gender/boat type for erg-to-water conversion
@@ -2153,9 +2256,8 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
 
             # Export options
             st.divider()
-            export_col1, export_col2, export_col3 = st.columns([1, 1, 4])
+            export_col1, export_col2 = st.columns([1, 5])
 
-            # Prepare export data - combine summary and detailed projections
             with export_col1:
                 # Excel download
                 excel_buffer = io.BytesIO()
@@ -2167,6 +2269,7 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                     for result in results:
                         if 'projections' in result:
                             lineup_id = result['lineup_id']
+                            lineup_display = result.get('lineup_display', lineup_id)
                             avg_age = result.get('avg_age', 0)
 
                             # Determine gender/boat type for erg-to-water conversion
@@ -2190,48 +2293,79 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                                         if projected_split > 0:
                                             projected_split = apply_erg_to_water(projected_split, export_boat_type, export_gender)
 
+                                    # Format method string
+                                    method = proj.get('projection_method', 'pauls_law')
+                                    power_law_points = proj.get('power_law_points')
+                                    if method == 'actual':
+                                        method_str = "Actual"
+                                    elif method == 'power_law' and power_law_points:
+                                        def fmt_dist(d):
+                                            return f"{d//1000}K" if d >= 1000 else f"{d}m"
+                                        dists = sorted([p[0] for p in power_law_points])
+                                        method_str = f"Power({fmt_dist(dists[0])},{fmt_dist(dists[1])})"
+                                    elif method == 'power_law':
+                                        method_str = "Power"
+                                    else:
+                                        method_str = "Paul's"
+
                                     proj_rows.append({
                                         'Seat': proj.get('seat', '-'),
                                         'Rower': proj['rower'],
                                         'Age': proj.get('age', '-'),
                                         'Source Split': format_split(source_split),
                                         'Projected Split': format_split(projected_split),
-                                        'Watts': proj.get('projected_watts', 0)
+                                        'Watts': proj.get('projected_watts', 0),
+                                        'Method': method_str
                                     })
                             if proj_rows:
                                 # Create DataFrame with average age header
                                 proj_df = pd.DataFrame(proj_rows)
-                                # Add average age and Masters category as first row (header info)
+                                # Add lineup name, average age, Masters category, and analysis settings as first row
                                 masters_cat = get_masters_category(avg_age)
-                                header_info = f'Average Age: {avg_age:.1f} | Cat: {masters_cat}'
+                                calc_display = "Watts" if calc_method == "watts" else "Split"
+                                pred_display = "Power Law" if pace_predictor == "power_law" else "Paul's Law"
+                                header_info = f'{lineup_display} | Avg Age: {avg_age:.1f} | Cat: {masters_cat} | Calc: {calc_display} | Pred: {pred_display}'
                                 if erg_to_water:
                                     boat_factor = get_boat_factor(export_boat_type, export_gender)
-                                    header_info += f' | On-Water (Factor: {boat_factor:.2f})'
-                                header_df = pd.DataFrame([{'Seat': header_info, 'Rower': '', 'Age': '', 'Source Split': '', 'Projected Split': '', 'Watts': ''}])
+                                    header_info += f' | On-Water ({boat_factor:.2f})'
+                                else:
+                                    header_info += ' | Erg (Raw)'
+                                header_df = pd.DataFrame([{'Seat': header_info, 'Rower': '', 'Age': '', 'Source Split': '', 'Projected Split': '', 'Watts': '', 'Method': ''}])
                                 combined_df = pd.concat([header_df, proj_df], ignore_index=True)
                                 combined_df.to_excel(
                                     writer, sheet_name=f'Lineup {lineup_id}', index=False
                                 )
 
                 excel_buffer.seek(0)
-                # Update filename to indicate on-water mode
-                filename_suffix = "_onwater" if erg_to_water else ""
-                st.download_button(
-                    label="Download Excel",
-                    data=excel_buffer,
-                    file_name=f"lineup_analysis_{boat_class}_{target_distance}m{filename_suffix}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
 
-            with export_col2:
                 # Copy to clipboard - create tab-separated text for easy pasting
-                clipboard_text = df.to_csv(sep='\t', index=False)
-
-                # Add header if erg-to-water is enabled
+                # Add analysis settings header
+                calc_display = "Watts" if calc_method == "watts" else "Split"
+                pred_display = "Power Law" if pace_predictor == "power_law" else "Paul's Law"
+                header_line = f"LINEUP ANALYSIS | Calc: {calc_display} | Predictor: {pred_display}"
                 if erg_to_water:
-                    boat_factor = get_boat_factor(boat_class, 'Mix' if boat_class.lower().startswith('mix') else None)
-                    clipboard_text = f"ON-WATER PROJECTION (Factor: {boat_factor:.2f}, Efficiency: {DEFAULT_TECH_EFFICIENCY:.2f})\n\n" + clipboard_text
+                    boat_type = boat_class[3:] if boat_class.lower().startswith('mix') else boat_class
+                    if boat_class.lower().startswith('mix'):
+                        boat_factor = get_boat_factor(boat_type, 'Mix')
+                        header_line += f" | Mixed {boat_class} Factor: {boat_factor:.2f}"
+                    else:
+                        # Get unique genders from all lineups
+                        lineup_genders = set(r.get('lineup_gender', 'M') for r in results if 'lineup_gender' in r)
+                        if len(lineup_genders) == 1:
+                            gender = lineup_genders.pop()
+                            boat_factor = get_boat_factor(boat_type, gender)
+                            gender_label = 'Men' if gender == 'M' else 'Women'
+                            header_line += f" | {gender_label} {boat_class}: {boat_factor:.2f}"
+                        elif 'M' in lineup_genders and 'W' in lineup_genders:
+                            men_factor = get_boat_factor(boat_type, 'M')
+                            women_factor = get_boat_factor(boat_type, 'W')
+                            header_line += f" | Men {boat_class}: {men_factor:.2f} / Women {boat_class}: {women_factor:.2f}"
+                        else:
+                            boat_factor = get_boat_factor(boat_type, 'M')
+                            header_line += f" | {boat_class} Factor: {boat_factor:.2f}"
+                else:
+                    header_line += " | Erg (Raw)"
+                clipboard_text = header_line + "\n\n" + df.to_csv(sep='\t', index=False)
 
                 # Add detailed projections
                 for result in results:
@@ -2247,9 +2381,14 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                             clip_gender = result.get('lineup_gender', 'M')
                             clip_boat_type = boat_class
 
-                        header_info = f"Lineup {result['lineup_id']} Details (Avg Age: {avg_age:.1f} | Cat: {masters_cat})"
+                        lineup_display = result.get('lineup_display', result['lineup_id'])
+                        gender_label = {'M': "Men's", 'W': "Women's", 'Mix': "Mixed"}.get(clip_gender, "")
+                        header_info = f"{lineup_display} Details (Avg Age: {avg_age:.1f} | Cat: {gender_label} {masters_cat})"
                         if erg_to_water:
-                            header_info += " [On-Water]"
+                            lineup_factor = get_boat_factor(clip_boat_type, clip_gender)
+                            header_info += f" [On-Water: {lineup_factor:.2f}]"
+                        else:
+                            header_info += " [Erg]"
                         clipboard_text += f"\n\n{header_info}:\n"
 
                         proj_rows = []
@@ -2260,45 +2399,90 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                                 if erg_to_water and projected_split > 0:
                                     projected_split = apply_erg_to_water(projected_split, clip_boat_type, clip_gender)
 
+                                # Format method string
+                                method = proj.get('projection_method', 'pauls_law')
+                                power_law_points = proj.get('power_law_points')
+                                if method == 'actual':
+                                    method_str = "Actual"
+                                elif method == 'power_law' and power_law_points:
+                                    def fmt_dist(d):
+                                        return f"{d//1000}K" if d >= 1000 else f"{d}m"
+                                    dists = sorted([p[0] for p in power_law_points])
+                                    method_str = f"Power({fmt_dist(dists[0])},{fmt_dist(dists[1])})"
+                                elif method == 'power_law':
+                                    method_str = "Power"
+                                else:
+                                    method_str = "Paul's"
+
                                 proj_rows.append({
                                     'Seat': proj.get('seat', '-'),
                                     'Rower': proj['rower'],
                                     'Projected Split': format_split(projected_split),
-                                    'Watts': f"{proj.get('projected_watts', 0):.0f}"
+                                    'Watts': f"{proj.get('projected_watts', 0):.0f}",
+                                    'Method': method_str
                                 })
                         if proj_rows:
                             clipboard_text += pd.DataFrame(proj_rows).to_csv(sep='\t', index=False)
 
-                # Escape text for safe JavaScript embedding
-                escaped_text = html.escape(clipboard_text).replace('\n', '\\n').replace('\r', '').replace("'", "\\'")
+                # Encode text as base64 to avoid any escaping issues
+                b64_text = base64.b64encode(clipboard_text.encode('utf-8')).decode('ascii')
 
                 # Copy to clipboard using components.html (executes JavaScript properly)
                 components.html(f"""
-                    <button onclick="
-                        navigator.clipboard.writeText('{escaped_text}'.replace(/\\\\n/g, '\\n')).then(() => {{
-                            this.innerText = 'Copied!';
-                            this.style.background = '#28a745';
-                            setTimeout(() => {{
-                                this.innerText = 'Copy to Clipboard';
-                                this.style.background = '#f0f2f6';
+                    <html>
+                    <head><style>
+                        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+                        html, body {{ height: 100%; overflow: hidden; margin: 0; padding: 0; }}
+                        body {{ padding-left: 2px; padding-right: 14px; }}
+                        button {{ display: block; width: 100%; }}
+                    </style></head>
+                    <body>
+                    <button id="copyBtn" data-text="{b64_text}" onclick="
+                        var text = atob(this.getAttribute('data-text'));
+                        navigator.clipboard.writeText(text).then(function() {{
+                            document.getElementById('copyBtn').innerText = 'Copied!';
+                            document.getElementById('copyBtn').style.background = '#28a745';
+                            document.getElementById('copyBtn').style.color = 'white';
+                            document.getElementById('copyBtn').style.borderColor = '#28a745';
+                            setTimeout(function() {{
+                                document.getElementById('copyBtn').innerText = 'Copy to Clipboard';
+                                document.getElementById('copyBtn').style.background = 'white';
+                                document.getElementById('copyBtn').style.color = 'rgb(49, 51, 63)';
+                                document.getElementById('copyBtn').style.borderColor = 'rgba(49, 51, 63, 0.2)';
                             }}, 2000);
-                        }}).catch(err => {{
-                            this.innerText = 'Failed';
-                            this.style.background = '#dc3545';
+                        }}).catch(function(err) {{
+                            document.getElementById('copyBtn').innerText = 'Failed';
+                            document.getElementById('copyBtn').style.background = '#dc3545';
                         }});
                     " style="
-                        width: 100%;
-                        padding: 0.5rem 1rem;
-                        font-size: 14px;
+                        padding: 0.25rem 0.75rem;
+                        height: 100%;
+                        font-family: 'Source Sans Pro', sans-serif;
+                        font-size: 16px;
                         font-weight: 400;
+                        line-height: 1.6;
                         cursor: pointer;
                         border-radius: 8px;
-                        border: 1px solid #e0e0e0;
-                        background: #f0f2f6;
-                        color: #262730;
-                        transition: all 0.2s;
-                    ">Copy to Clipboard</button>
-                """, height=45)
+                        border: 1px solid rgba(49, 51, 63, 0.2);
+                        background-color: white;
+                        color: rgb(49, 51, 63);
+                    "
+                    onmouseover="this.style.borderColor='rgb(255, 75, 75)'; this.style.color='rgb(255, 75, 75)';"
+                    onmouseout="this.style.borderColor='rgba(49, 51, 63, 0.2)'; this.style.color='rgb(49, 51, 63)';"
+                    >Copy to Clipboard</button>
+                    </body>
+                    </html>
+                """, height=36, scrolling=False)
+
+                # Update filename to indicate on-water mode
+                filename_suffix = "_onwater" if erg_to_water else ""
+                st.download_button(
+                    label="Download Excel",
+                    data=excel_buffer,
+                    file_name=f"lineup_analysis_{boat_class}_{target_distance}m{filename_suffix}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
 
         else:
             st.info("No lineups to analyze. Add rowers to at least one lineup.")
