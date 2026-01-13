@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 import math
 import statistics
+import io
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
 from pathlib import Path
@@ -1991,6 +1992,86 @@ def main():
 
                         if proj_data:
                             st.table(pd.DataFrame(proj_data))
+
+            # Export options
+            st.divider()
+            export_col1, export_col2, export_col3 = st.columns([1, 1, 4])
+
+            # Prepare export data - combine summary and detailed projections
+            with export_col1:
+                # Excel download
+                excel_buffer = io.BytesIO()
+                with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                    # Summary sheet
+                    df.to_excel(writer, sheet_name='Summary', index=False)
+
+                    # Detailed projections for each lineup
+                    for result in results:
+                        if 'projections' in result:
+                            lineup_id = result['lineup_id']
+                            proj_rows = []
+                            for proj in result['projections']:
+                                if 'error' not in proj:
+                                    proj_rows.append({
+                                        'Seat': proj.get('seat', '-'),
+                                        'Rower': proj['rower'],
+                                        'Age': proj.get('age', '-'),
+                                        'Source Split': format_split(proj.get('source_split', 0)),
+                                        'Projected Split': format_split(proj.get('projected_split', 0)),
+                                        'Watts': proj.get('projected_watts', 0)
+                                    })
+                            if proj_rows:
+                                pd.DataFrame(proj_rows).to_excel(
+                                    writer, sheet_name=f'Lineup {lineup_id}', index=False
+                                )
+
+                excel_buffer.seek(0)
+                st.download_button(
+                    label="Download Excel",
+                    data=excel_buffer,
+                    file_name=f"lineup_analysis_{boat_class}_{target_distance}m.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+
+            with export_col2:
+                # Copy to clipboard - create tab-separated text
+                clipboard_text = df.to_csv(sep='\t', index=False)
+
+                # Add detailed projections
+                for result in results:
+                    if 'projections' in result:
+                        clipboard_text += f"\n\nLineup {result['lineup_id']} Details:\n"
+                        proj_rows = []
+                        for proj in result['projections']:
+                            if 'error' not in proj:
+                                proj_rows.append({
+                                    'Seat': proj.get('seat', '-'),
+                                    'Rower': proj['rower'],
+                                    'Projected Split': format_split(proj.get('projected_split', 0)),
+                                    'Watts': f"{proj.get('projected_watts', 0):.0f}"
+                                })
+                        if proj_rows:
+                            clipboard_text += pd.DataFrame(proj_rows).to_csv(sep='\t', index=False)
+
+                # Use JavaScript to copy to clipboard
+                copy_button_id = "copy_btn_" + str(hash(clipboard_text))[:8]
+                st.markdown(f'''
+                    <button id="{copy_button_id}" style="
+                        width: 100%;
+                        padding: 0.5rem 1rem;
+                        background-color: #f0f2f6;
+                        border: 1px solid #e0e0e0;
+                        border-radius: 0.5rem;
+                        cursor: pointer;
+                        font-size: 14px;
+                    " onclick="
+                        navigator.clipboard.writeText(`{clipboard_text.replace('`', "'")}`);
+                        this.textContent = 'Copied!';
+                        setTimeout(() => this.textContent = 'Copy to Clipboard', 2000);
+                    ">Copy to Clipboard</button>
+                ''', unsafe_allow_html=True)
+
         else:
             st.info("No lineups to analyze. Add rowers to at least one lineup.")
     else:
