@@ -2158,17 +2158,16 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                     # Get unique genders from all lineups
                     lineup_genders = set(r.get('lineup_gender', 'M') for r in results if 'lineup_gender' in r)
 
-                    if len(lineup_genders) == 1:
+                    if 'Mix' in lineup_genders or ('M' in lineup_genders and 'W' in lineup_genders):
+                        # Mixed lineup or comparing men vs women - show averaged factor
+                        boat_factor = get_boat_factor(boat_type, 'Mix')
+                        st.caption(f"*On-Water Projection Mode* | Mixed {boat_class} Factor: {boat_factor:.2f} | Tech Efficiency: {DEFAULT_TECH_EFFICIENCY:.2f}")
+                    elif len(lineup_genders) == 1:
                         # All lineups same gender
                         gender = lineup_genders.pop()
                         boat_factor = get_boat_factor(boat_type, gender)
                         gender_label = 'Men' if gender == 'M' else 'Women'
                         st.caption(f"*On-Water Projection Mode* | {gender_label} {boat_class} Factor: {boat_factor:.2f} | Tech Efficiency: {DEFAULT_TECH_EFFICIENCY:.2f}")
-                    elif 'M' in lineup_genders and 'W' in lineup_genders:
-                        # Comparing men vs women - show both factors
-                        men_factor = get_boat_factor(boat_type, 'M')
-                        women_factor = get_boat_factor(boat_type, 'W')
-                        st.caption(f"*On-Water Projection Mode* | Men {boat_class}: {men_factor:.2f} / Women {boat_class}: {women_factor:.2f} | Tech Efficiency: {DEFAULT_TECH_EFFICIENCY:.2f}")
                     else:
                         # Default fallback
                         boat_factor = get_boat_factor(boat_type, 'M')
@@ -2351,16 +2350,17 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                     else:
                         # Get unique genders from all lineups
                         lineup_genders = set(r.get('lineup_gender', 'M') for r in results if 'lineup_gender' in r)
-                        if len(lineup_genders) == 1:
+                        if 'Mix' in lineup_genders or ('M' in lineup_genders and 'W' in lineup_genders):
+                            # Mixed lineup or comparing men vs women - show averaged factor
+                            boat_factor = get_boat_factor(boat_type, 'Mix')
+                            header_line += f" | Mixed {boat_class}: {boat_factor:.2f}"
+                        elif len(lineup_genders) == 1:
                             gender = lineup_genders.pop()
                             boat_factor = get_boat_factor(boat_type, gender)
                             gender_label = 'Men' if gender == 'M' else 'Women'
                             header_line += f" | {gender_label} {boat_class}: {boat_factor:.2f}"
-                        elif 'M' in lineup_genders and 'W' in lineup_genders:
-                            men_factor = get_boat_factor(boat_type, 'M')
-                            women_factor = get_boat_factor(boat_type, 'W')
-                            header_line += f" | Men {boat_class}: {men_factor:.2f} / Women {boat_class}: {women_factor:.2f}"
                         else:
+                            # Default fallback
                             boat_factor = get_boat_factor(boat_type, 'M')
                             header_line += f" | {boat_class} Factor: {boat_factor:.2f}"
                 else:
