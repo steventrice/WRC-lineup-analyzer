@@ -2011,6 +2011,7 @@ def main():
                     for result in results:
                         if 'projections' in result:
                             lineup_id = result['lineup_id']
+                            avg_age = result.get('avg_age', 0)
                             proj_rows = []
                             for proj in result['projections']:
                                 if 'error' not in proj:
@@ -2023,7 +2024,12 @@ def main():
                                         'Watts': proj.get('projected_watts', 0)
                                     })
                             if proj_rows:
-                                pd.DataFrame(proj_rows).to_excel(
+                                # Create DataFrame with average age header
+                                proj_df = pd.DataFrame(proj_rows)
+                                # Add average age as first row (header info)
+                                header_df = pd.DataFrame([{'Seat': f'Average Age: {avg_age:.1f}', 'Rower': '', 'Age': '', 'Source Split': '', 'Projected Split': '', 'Watts': ''}])
+                                combined_df = pd.concat([header_df, proj_df], ignore_index=True)
+                                combined_df.to_excel(
                                     writer, sheet_name=f'Lineup {lineup_id}', index=False
                                 )
 
@@ -2043,7 +2049,8 @@ def main():
                 # Add detailed projections
                 for result in results:
                     if 'projections' in result:
-                        clipboard_text += f"\n\nLineup {result['lineup_id']} Details:\n"
+                        avg_age = result.get('avg_age', 0)
+                        clipboard_text += f"\n\nLineup {result['lineup_id']} Details (Avg Age: {avg_age:.1f}):\n"
                         proj_rows = []
                         for proj in result['projections']:
                             if 'error' not in proj:
