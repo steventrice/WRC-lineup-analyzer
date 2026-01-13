@@ -283,7 +283,7 @@ class PhysicsEngine:
     def pauls_law_projection(known_split: float, known_dist: int, target_dist: int) -> float:
         """
         Apply Paul's Law to project split at different distance.
-        Paul's Law: Projected_Split = Known_Split + 5 * log2(Target_Dist / Known_Dist)
+        Paul's Law: Projected_Split = Known_Split + 6 * log2(Target_Dist / Known_Dist)
         """
         if known_dist == target_dist:
             return known_split
@@ -291,7 +291,7 @@ class PhysicsEngine:
             return known_split
 
         distance_ratio = target_dist / known_dist
-        split_adjustment = 5 * math.log2(distance_ratio)
+        split_adjustment = 6 * math.log2(distance_ratio)
         return known_split + split_adjustment
 
     @staticmethod
@@ -1363,7 +1363,7 @@ def _load_data_impl():
     return None, f"No data source available. Errors: {' | '.join(errors)}", None
 
 
-@st.cache_resource(ttl=300)  # Cache for 5 minutes, then refresh from Google Sheets
+@st.cache_resource(ttl=3600)  # Cache for 1 hour, then refresh from Google Sheets
 def load_data(cache_version: int = 0):
     """Cached wrapper - pass different cache_version to force refresh"""
     import datetime
@@ -1546,7 +1546,7 @@ def main():
             horizontal=True,
             help="""**Power Law**: Fits a personalized fatigue curve to each athlete's test data. Uses formula: Watts = k × Distance^b. More accurate when athlete has multiple test distances.
 
-**Paul's Law**: Traditional formula adding 5 seconds per 500m split for each doubling of distance. Simple and reliable with single test score."""
+**Paul's Law**: Traditional formula adding 6 seconds per 500m split for each doubling of distance. Simple and reliable with single test score."""
         )
         pace_predictor = "power_law" if pace_predictor == "Power" else "pauls_law"
 
@@ -1919,7 +1919,7 @@ def main():
                     pct_diff = f"{result['side_balance_pct']:.1f}%" if result.get('side_balance_pct') else "-"
 
                     table_data.append({
-                        'Place': f"🥇 {place}" if place == 1 else str(place),
+                        'Place': str(place),
                         'Lineup': result['lineup_id'],
                         'Rowers': str(result['rower_count']),
                         'Split': format_split(result['boat_split_500m']),
