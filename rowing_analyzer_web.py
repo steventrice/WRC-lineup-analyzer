@@ -2026,8 +2026,9 @@ def main():
                             if proj_rows:
                                 # Create DataFrame with average age header
                                 proj_df = pd.DataFrame(proj_rows)
-                                # Add average age as first row (header info)
-                                header_df = pd.DataFrame([{'Seat': f'Average Age: {avg_age:.1f}', 'Rower': '', 'Age': '', 'Source Split': '', 'Projected Split': '', 'Watts': ''}])
+                                # Add average age and Masters category as first row (header info)
+                                masters_cat = get_masters_category(avg_age)
+                                header_df = pd.DataFrame([{'Seat': f'Average Age: {avg_age:.1f} | Cat: {masters_cat}', 'Rower': '', 'Age': '', 'Source Split': '', 'Projected Split': '', 'Watts': ''}])
                                 combined_df = pd.concat([header_df, proj_df], ignore_index=True)
                                 combined_df.to_excel(
                                     writer, sheet_name=f'Lineup {lineup_id}', index=False
@@ -2050,7 +2051,8 @@ def main():
                 for result in results:
                     if 'projections' in result:
                         avg_age = result.get('avg_age', 0)
-                        clipboard_text += f"\n\nLineup {result['lineup_id']} Details (Avg Age: {avg_age:.1f}):\n"
+                        masters_cat = get_masters_category(avg_age)
+                        clipboard_text += f"\n\nLineup {result['lineup_id']} Details (Avg Age: {avg_age:.1f} | Cat: {masters_cat}):\n"
                         proj_rows = []
                         for proj in result['projections']:
                             if 'error' not in proj:
