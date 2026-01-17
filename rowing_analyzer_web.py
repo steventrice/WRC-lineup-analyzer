@@ -42,6 +42,28 @@ def get_app_password():
         return "doubleshot"
 
 # =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+def parse_bool(value, default=False):
+    """Parse boolean value that might be True/False or 'TRUE'/'FALSE' string.
+
+    Google Sheets checkboxes can be exported as:
+    - Python bool (True/False)
+    - String ("TRUE"/"FALSE")
+
+    Using bool("FALSE") returns True (non-empty string is truthy), so we need
+    to explicitly check for string values.
+    """
+    if pd.isna(value):
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().upper() == 'TRUE'
+    return bool(value)
+
+# =============================================================================
 # DATA MODELS
 # =============================================================================
 
@@ -595,9 +617,9 @@ class RosterManager:
                         gender = 'F'
                     break
 
-            side_port = bool(row.get('P', True)) if pd.notna(row.get('P')) else True
-            side_starboard = bool(row.get('S', True)) if pd.notna(row.get('S')) else True
-            side_cox = bool(row.get('X', False)) if pd.notna(row.get('X')) else False
+            side_port = parse_bool(row.get('P'), default=True)
+            side_starboard = parse_bool(row.get('S'), default=True)
+            side_cox = parse_bool(row.get('X'), default=False)
 
             pref_order = ""
             if 'Pref' in row.index and pd.notna(row['Pref']):
