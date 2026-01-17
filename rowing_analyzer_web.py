@@ -2070,14 +2070,16 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
             # Per-lineup tech efficiency override (only shown when erg-to-water is enabled)
             if erg_to_water:
                 tech_key = f"tech_efficiency_{key}"
-                # Sync with global value - update session state if it matches the old global or doesn't exist
-                if tech_key not in st.session_state or st.session_state.get('_last_global_tech_eff') != global_tech_efficiency:
+                # Initialize or sync with global value when global changes
+                if tech_key not in st.session_state:
+                    st.session_state[tech_key] = global_tech_efficiency
+                elif st.session_state.get('_last_global_tech_eff') is not None and st.session_state.get('_last_global_tech_eff') != global_tech_efficiency:
+                    # Global changed, update lineup values to match
                     st.session_state[tech_key] = global_tech_efficiency
                 lineup_tech = st.number_input(
                     f"{title} Tech Eff",
                     min_value=0.90,
                     max_value=1.20,
-                    value=st.session_state[tech_key],
                     step=0.01,
                     format="%.2f",
                     key=tech_key,
