@@ -1791,7 +1791,7 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                 step=0.01,
                 format="%.2f",
                 disabled=not erg_to_water,
-                help="Technical efficiency multiplier. 1.05 = 5% slippage (typical for Masters/Club). Lower = more efficient crew."
+                help="Technical efficiency multiplier: 1.00 = National team | 1.05 = Excellent club | 1.10 = Intermediate club"
             )
 
     st.divider()
@@ -2083,7 +2083,7 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                     step=0.01,
                     format="%.2f",
                     key=tech_key,
-                    help=f"Override tech efficiency for {title}. Leave at global value ({global_tech_efficiency:.2f}) to use default."
+                    help=f"Override for {title}. 1.00 = National team | 1.05 = Excellent club | 1.10 = Intermediate club"
                 )
 
             stats = get_lineup_stats(lineup, roster_manager)
