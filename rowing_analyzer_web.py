@@ -1116,7 +1116,7 @@ class RosterManager:
 # Boat factors for converting erg times to projected on-water times
 # Reference: BioRow/Kleshnev prognostic speeds
 BOAT_FACTORS = {
-    "8+": 0.93, "4x": 0.96, "4+": 1.00, "4-": 1.00,
+    "8+": 0.93, "4x": 0.96, "4+": 1.04, "4-": 1.00,
     "2x": 1.04, "2-": 1.08, "1x": 1.16
 }
 
@@ -1748,7 +1748,7 @@ def main():
 
 **Formula**: On-Water Time = Erg Time × Boat Factor × Tech Efficiency
 
-**Boat Factors**: 8+ (0.93) | 4x (0.96) | 4+/4- (1.00) | 2x (1.04) | 2- (1.08) | 1x (1.16)"""
+**Boat Factors**: 8+ (0.93) | 4x (0.96) | 4- (1.00) | 4+/2x (1.04) | 2- (1.08) | 1x (1.16)"""
             )
         with tech_eff_col:
             global_tech_efficiency = st.number_input(
