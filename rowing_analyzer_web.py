@@ -1739,14 +1739,14 @@ def main():
         pace_predictor = "power_law" if pace_predictor == "Power" else "pauls_law"
 
     with calc_col3:
-        erg_water_col, tech_eff_col = st.columns([1.5, 1])
+        erg_water_col, tech_eff_col, race_dist_col = st.columns([1.5, 1, 1])
         with erg_water_col:
             erg_to_water = st.toggle(
                 "Erg-to-Water",
                 value=False,
                 help="""**Erg-to-Water Adjustment**: Convert erg scores to projected on-water times using BioRow/Kleshnev boat factors.
 
-**Formula**: On-Water Time = Erg Time × Boat Factor × Tech Efficiency
+**Formula**: On-Water Time = Erg Time × Boat Factor × Tech Efficiency × (Race Dist / Erg Dist)
 
 **Boat Factors**: 8+ (0.93) | 4x (0.96) | 4- (1.00) | 4+/2x (1.04) | 2- (1.08) | 1x (1.16)"""
             )
@@ -1760,6 +1760,16 @@ def main():
                 format="%.2f",
                 disabled=not erg_to_water,
                 help="Technical efficiency multiplier: 1.00 = National team | 1.05 = Excellent club | 1.10 = Intermediate club"
+            )
+        with race_dist_col:
+            race_distance = st.number_input(
+                "Race Dist",
+                min_value=500,
+                max_value=10000,
+                value=target_distance,
+                step=100,
+                disabled=not erg_to_water,
+                help=f"Actual race distance in meters. Scales projection from {target_distance}m erg data."
             )
 
     st.divider()
@@ -2278,10 +2288,11 @@ def main():
 
                     if erg_to_water:
                         tech_eff = result.get('tech_efficiency', global_tech_efficiency)
+                        dist_ratio = race_distance / target_distance
 
-                        # Apply erg-to-water conversion
-                        raw_time = apply_erg_to_water(result['raw_time'], boat_class, tech_eff)
-                        adjusted_time = apply_erg_to_water(result['adjusted_time'], boat_class, tech_eff)
+                        # Apply erg-to-water conversion with distance ratio
+                        raw_time = apply_erg_to_water(result['raw_time'], boat_class, tech_eff) * dist_ratio
+                        adjusted_time = apply_erg_to_water(result['adjusted_time'], boat_class, tech_eff) * dist_ratio
                         split_500m = apply_erg_to_water(result['boat_split_500m'], boat_class, tech_eff)
 
                     # Format age with masters category
@@ -2311,7 +2322,10 @@ def main():
                 lineup_tech_effs = set(r.get('tech_efficiency', global_tech_efficiency) for r in results)
                 tech_eff_str = f"{global_tech_efficiency:.2f}" if len(lineup_tech_effs) <= 1 else "varies"
                 boat_factor = get_boat_factor(boat_class)
-                st.caption(f"*On-Water Projection Mode* | {boat_class} Factor: {boat_factor:.2f} | Tech Efficiency: {tech_eff_str}")
+                caption = f"*On-Water Projection Mode* | {boat_class} Factor: {boat_factor:.2f} | Tech Eff: {tech_eff_str}"
+                if race_distance != target_distance:
+                    caption += f" | Race: {race_distance}m (from {target_distance}m)"
+                st.caption(caption)
 
             st.dataframe(df, use_container_width=True, hide_index=True)
 
