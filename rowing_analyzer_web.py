@@ -1116,59 +1116,28 @@ class RosterManager:
 # Boat factors for converting erg times to projected on-water times
 # Reference: BioRow/Kleshnev prognostic speeds
 BOAT_FACTORS = {
-    # Men
-    "M8+": 0.93, "M4x": 0.96, "M4-": 1.00,
-    "M2x": 1.04, "M2-": 1.08, "M1x": 1.16,
-    # Women
-    "W8+": 0.94, "W4x": 0.97, "W4-": 1.00,
-    "W2x": 1.05, "W2-": 1.10, "W1x": 1.18
+    "8+": 0.93, "4x": 0.96, "4+": 1.00, "4-": 1.00,
+    "2x": 1.04, "2-": 1.08, "1x": 1.16
 }
 
 # Default tech efficiency for Masters/Club (5% slippage)
 DEFAULT_TECH_EFFICIENCY = 1.05
 
 
-def get_boat_factor(boat_class: str, gender: str = None) -> float:
+def get_boat_factor(boat_class: str) -> float:
     """Get boat factor for erg-to-water conversion.
 
     Args:
-        boat_class: Boat class string (e.g., "8+", "4x", "2-", "1x", "Mix8+")
-        gender: Gender override - 'M', 'W', or 'Mix' (if not embedded in boat_class)
+        boat_class: Boat class string (e.g., "8+", "4x", "2-", "1x")
 
     Returns:
         Boat factor multiplier for erg-to-water conversion.
-        For mixed boats, returns average of Men's and Women's factors.
     """
-    # Normalize boat class
     boat_class = boat_class.strip()
-
-    # Check if it's a mixed boat
-    is_mixed = boat_class.lower().startswith('mix')
-    if is_mixed:
-        # Extract the boat type (e.g., "Mix8+" -> "8+")
-        boat_type = boat_class[3:]  # Remove "Mix" prefix
-    elif boat_class[0] in ('M', 'W') and len(boat_class) > 1:
-        # Already has gender prefix (e.g., "M8+", "W4x")
-        return BOAT_FACTORS.get(boat_class, 1.0)
-    else:
-        boat_type = boat_class
-
-    # Handle mixed boats - average men's and women's factors
-    if is_mixed or gender == 'Mix':
-        men_key = f"M{boat_type}"
-        women_key = f"W{boat_type}"
-        men_factor = BOAT_FACTORS.get(men_key, 1.0)
-        women_factor = BOAT_FACTORS.get(women_key, 1.0)
-        return (men_factor + women_factor) / 2
-
-    # Use provided gender or default to Men's factors
-    if gender == 'W':
-        return BOAT_FACTORS.get(f"W{boat_type}", 1.0)
-    else:
-        return BOAT_FACTORS.get(f"M{boat_type}", 1.0)
+    return BOAT_FACTORS.get(boat_class, 1.0)
 
 
-def apply_erg_to_water(erg_time_seconds: float, boat_class: str, gender: str = None,
+def apply_erg_to_water(erg_time_seconds: float, boat_class: str,
                        tech_efficiency: float = DEFAULT_TECH_EFFICIENCY) -> float:
     """Convert erg time to projected on-water time.
 
@@ -1177,13 +1146,12 @@ def apply_erg_to_water(erg_time_seconds: float, boat_class: str, gender: str = N
     Args:
         erg_time_seconds: Raw erg time in seconds
         boat_class: Boat class string
-        gender: Gender for factor lookup ('M', 'W', or 'Mix')
         tech_efficiency: Technical efficiency multiplier (default 1.05 for Masters/Club)
 
     Returns:
         Projected on-water time in seconds
     """
-    boat_factor = get_boat_factor(boat_class, gender)
+    boat_factor = get_boat_factor(boat_class)
     return erg_time_seconds * boat_factor * tech_efficiency
 
 
@@ -1780,7 +1748,7 @@ def main():
 
 **Formula**: On-Water Time = Erg Time × Boat Factor × Tech Efficiency
 
-Boat factors account for drag differences between erg and on-water rowing. Mixed boats average Men's and Women's factors."""
+**Boat Factors**: 8+ (0.93) | 4x (0.96) | 4+/4- (1.00) | 2x (1.04) | 2- (1.08) | 1x (1.16)"""
             )
         with tech_eff_col:
             global_tech_efficiency = st.number_input(
@@ -2309,14 +2277,12 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                     split_500m = result['boat_split_500m']
 
                     if erg_to_water:
-                        # Use auto-detected lineup gender for boat factor lookup
-                        gender = result.get('lineup_gender', 'M')
                         tech_eff = result.get('tech_efficiency', global_tech_efficiency)
 
                         # Apply erg-to-water conversion
-                        raw_time = apply_erg_to_water(result['raw_time'], boat_class, gender, tech_eff)
-                        adjusted_time = apply_erg_to_water(result['adjusted_time'], boat_class, gender, tech_eff)
-                        split_500m = apply_erg_to_water(result['boat_split_500m'], boat_class, gender, tech_eff)
+                        raw_time = apply_erg_to_water(result['raw_time'], boat_class, tech_eff)
+                        adjusted_time = apply_erg_to_water(result['adjusted_time'], boat_class, tech_eff)
+                        split_500m = apply_erg_to_water(result['boat_split_500m'], boat_class, tech_eff)
 
                     # Format age with masters category
                     avg_age = result.get('avg_age', 0)
@@ -2341,26 +2307,11 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
 
             # Show indicator when erg-to-water conversion is active
             if erg_to_water:
-                # Get unique genders from all lineups (auto-detected)
-                lineup_genders = set(r.get('lineup_gender', 'M') for r in results if 'lineup_gender' in r)
                 # Check if lineups have different tech efficiencies
                 lineup_tech_effs = set(r.get('tech_efficiency', global_tech_efficiency) for r in results)
                 tech_eff_str = f"{global_tech_efficiency:.2f}" if len(lineup_tech_effs) <= 1 else "varies"
-
-                if 'Mix' in lineup_genders or ('M' in lineup_genders and 'W' in lineup_genders):
-                    # Mixed lineup or comparing men vs women - show averaged factor
-                    boat_factor = get_boat_factor(boat_class, 'Mix')
-                    st.caption(f"*On-Water Projection Mode* | Mixed {boat_class} Factor: {boat_factor:.2f} | Tech Efficiency: {tech_eff_str}")
-                elif len(lineup_genders) == 1:
-                    # All lineups same gender
-                    gender = lineup_genders.pop()
-                    boat_factor = get_boat_factor(boat_class, gender)
-                    gender_label = 'Men' if gender == 'M' else 'Women'
-                    st.caption(f"*On-Water Projection Mode* | {gender_label} {boat_class} Factor: {boat_factor:.2f} | Tech Efficiency: {tech_eff_str}")
-                else:
-                    # Default fallback
-                    boat_factor = get_boat_factor(boat_class, 'M')
-                    st.caption(f"*On-Water Projection Mode* | {boat_class} Factor: {boat_factor:.2f} | Tech Efficiency: {tech_eff_str}")
+                boat_factor = get_boat_factor(boat_class)
+                st.caption(f"*On-Water Projection Mode* | {boat_class} Factor: {boat_factor:.2f} | Tech Efficiency: {tech_eff_str}")
 
             st.dataframe(df, use_container_width=True, hide_index=True)
 
@@ -2371,9 +2322,6 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                         st.markdown(f"**Lineup {result.get('lineup_display', result['lineup_id'])}**")
                         proj_data = []
 
-                        # Use auto-detected lineup gender for erg-to-water conversion
-                        proj_gender = result.get('lineup_gender', 'M')
-                        proj_boat_type = boat_class
                         proj_tech_eff = result.get('tech_efficiency', global_tech_efficiency)
 
                         for proj in result['projections']:
@@ -2406,9 +2354,9 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                                 projected_split = proj.get('projected_split', 0)
 
                                 if erg_to_water and source_split > 0:
-                                    source_split = apply_erg_to_water(source_split, proj_boat_type, proj_gender, proj_tech_eff)
+                                    source_split = apply_erg_to_water(source_split, boat_class, proj_tech_eff)
                                 if erg_to_water and projected_split > 0:
-                                    projected_split = apply_erg_to_water(projected_split, proj_boat_type, proj_gender, proj_tech_eff)
+                                    projected_split = apply_erg_to_water(projected_split, boat_class, proj_tech_eff)
 
                                 proj_data.append({
                                     'Seat': proj.get('seat', '-'),
@@ -2457,9 +2405,6 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                             lineup_display = result.get('lineup_display', lineup_id)
                             avg_age = result.get('avg_age', 0)
 
-                            # Use auto-detected lineup gender for erg-to-water conversion
-                            export_gender = result.get('lineup_gender', 'M')
-                            export_boat_type = boat_class
                             export_tech_eff = result.get('tech_efficiency', global_tech_efficiency)
 
                             proj_rows = []
@@ -2471,9 +2416,9 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
 
                                     if erg_to_water:
                                         if source_split > 0:
-                                            source_split = apply_erg_to_water(source_split, export_boat_type, export_gender, export_tech_eff)
+                                            source_split = apply_erg_to_water(source_split, boat_class, export_tech_eff)
                                         if projected_split > 0:
-                                            projected_split = apply_erg_to_water(projected_split, export_boat_type, export_gender, export_tech_eff)
+                                            projected_split = apply_erg_to_water(projected_split, boat_class, export_tech_eff)
 
                                     # Format method string
                                     method = proj.get('projection_method', 'pauls_law')
@@ -2508,7 +2453,7 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                                 pred_display = "Power Law" if pace_predictor == "power_law" else "Paul's Law"
                                 header_info = f'{lineup_display} | Avg Age: {avg_age:.1f} | Cat: {masters_cat} | Calc: {calc_display} | Pred: {pred_display}'
                                 if erg_to_water:
-                                    boat_factor = get_boat_factor(export_boat_type, export_gender)
+                                    boat_factor = get_boat_factor(boat_class)
                                     header_info += f' | On-Water ({boat_factor:.2f})'
                                 else:
                                     header_info += ' | Erg (Raw)'
@@ -2526,21 +2471,8 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                 pred_display = "Power Law" if pace_predictor == "power_law" else "Paul's Law"
                 header_line = f"LINEUP ANALYSIS | Calc: {calc_display} | Predictor: {pred_display}"
                 if erg_to_water:
-                    # Get unique genders from all lineups (auto-detected)
-                    lineup_genders = set(r.get('lineup_gender', 'M') for r in results if 'lineup_gender' in r)
-                    if 'Mix' in lineup_genders or ('M' in lineup_genders and 'W' in lineup_genders):
-                        # Mixed lineup or comparing men vs women - show averaged factor
-                        boat_factor = get_boat_factor(boat_class, 'Mix')
-                        header_line += f" | Mixed {boat_class}: {boat_factor:.2f}"
-                    elif len(lineup_genders) == 1:
-                        gender = lineup_genders.pop()
-                        boat_factor = get_boat_factor(boat_class, gender)
-                        gender_label = 'Men' if gender == 'M' else 'Women'
-                        header_line += f" | {gender_label} {boat_class}: {boat_factor:.2f}"
-                    else:
-                        # Default fallback
-                        boat_factor = get_boat_factor(boat_class, 'M')
-                        header_line += f" | {boat_class} Factor: {boat_factor:.2f}"
+                    boat_factor = get_boat_factor(boat_class)
+                    header_line += f" | {boat_class} Factor: {boat_factor:.2f}"
                 else:
                     header_line += " | Erg (Raw)"
                 clipboard_text = header_line + "\n\n" + df.to_csv(sep='\t', index=False)
@@ -2550,17 +2482,12 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                     if 'projections' in result:
                         avg_age = result.get('avg_age', 0)
                         masters_cat = get_masters_category(avg_age)
-
-                        # Use auto-detected lineup gender for erg-to-water conversion
-                        clip_gender = result.get('lineup_gender', 'M')
-                        clip_boat_type = boat_class
                         clip_tech_eff = result.get('tech_efficiency', global_tech_efficiency)
 
                         lineup_display = result.get('lineup_display', result['lineup_id'])
-                        gender_label = {'M': "Men's", 'W': "Women's", 'Mix': "Mixed"}.get(clip_gender, "")
-                        header_info = f"{lineup_display} Details (Avg Age: {avg_age:.1f} | Cat: {gender_label} {masters_cat})"
+                        header_info = f"{lineup_display} Details (Avg Age: {avg_age:.1f} | Cat: {masters_cat})"
                         if erg_to_water:
-                            lineup_factor = get_boat_factor(clip_boat_type, clip_gender)
+                            lineup_factor = get_boat_factor(boat_class)
                             header_info += f" [On-Water: {lineup_factor:.2f} x {clip_tech_eff:.2f}]"
                         else:
                             header_info += " [Erg]"
@@ -2572,7 +2499,7 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                                 # Get split - apply erg-to-water if enabled
                                 projected_split = proj.get('projected_split', 0)
                                 if erg_to_water and projected_split > 0:
-                                    projected_split = apply_erg_to_water(projected_split, clip_boat_type, clip_gender, clip_tech_eff)
+                                    projected_split = apply_erg_to_water(projected_split, boat_class, clip_tech_eff)
 
                                 # Format method string
                                 method = proj.get('projection_method', 'pauls_law')
