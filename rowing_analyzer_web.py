@@ -111,15 +111,39 @@ class Rower:
         return self.scores[closest_dist]
 
     def side_preference_str(self) -> str:
-        """Return side preference as a string like 'P', 'S', 'PS', 'X', etc."""
-        parts = []
+        """Return side preference as a string like 'P', 'S', 'PS', 'X', etc.
+
+        If pref_order is set (from Pref column), use that order.
+        Otherwise default to P, S, X order.
+        """
+        # Build set of allowed preferences based on checkboxes
+        allowed = set()
         if self.side_port:
-            parts.append('P')
+            allowed.add('P')
         if self.side_starboard:
-            parts.append('S')
+            allowed.add('S')
         if self.side_coxswain:
+            allowed.add('X')
+
+        if not allowed:
+            return '-'
+
+        # If pref_order is specified, use that order (filtering to only allowed chars)
+        if self.pref_order:
+            # Extract only P, S, X characters from pref_order in the order they appear
+            ordered = [c for c in self.pref_order.upper() if c in allowed]
+            if ordered:
+                return ''.join(ordered)
+
+        # Default order: P, S, X
+        parts = []
+        if 'P' in allowed:
+            parts.append('P')
+        if 'S' in allowed:
+            parts.append('S')
+        if 'X' in allowed:
             parts.append('X')
-        return ''.join(parts) if parts else '-'
+        return ''.join(parts)
 
     def is_attending(self, regatta_name: str) -> bool:
         return self.regatta_signups.get(regatta_name, False)
