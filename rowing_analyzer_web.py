@@ -2111,12 +2111,81 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                     st.session_state.lineup_b = st.session_state.lineup_c.copy()
                     st.rerun()
 
+            # Copy lineup names to clipboard button
+            rower_names_list = [r for r in lineup if r is not None]
+            if rower_names_list:
+                names_text = "\n".join(rower_names_list)
+                b64_names = base64.b64encode(names_text.encode('utf-8')).decode('ascii')
+                btn_id = f"copyLineup_{key}"
+                components.html(f"""
+                    <html>
+                    <head><style>
+                        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+                        html, body {{ height: 100%; overflow: hidden; margin: 0; padding: 0; }}
+                        body {{ padding-left: 2px; padding-right: 2px; }}
+                        button {{ display: block; width: 100%; }}
+                    </style></head>
+                    <body>
+                    <button id="{btn_id}" data-text="{b64_names}" onclick="
+                        var text = atob(this.getAttribute('data-text'));
+                        navigator.clipboard.writeText(text).then(function() {{
+                            document.getElementById('{btn_id}').innerText = 'Copied!';
+                            document.getElementById('{btn_id}').style.background = '#28a745';
+                            document.getElementById('{btn_id}').style.color = 'white';
+                            document.getElementById('{btn_id}').style.borderColor = '#28a745';
+                            setTimeout(function() {{
+                                document.getElementById('{btn_id}').innerText = 'Copy Lineup';
+                                document.getElementById('{btn_id}').style.background = 'white';
+                                document.getElementById('{btn_id}').style.color = 'rgb(49, 51, 63)';
+                                document.getElementById('{btn_id}').style.borderColor = 'rgba(49, 51, 63, 0.2)';
+                            }}, 2000);
+                        }}).catch(function(err) {{
+                            document.getElementById('{btn_id}').innerText = 'Failed';
+                            document.getElementById('{btn_id}').style.background = '#dc3545';
+                        }});
+                    " style="
+                        padding: 0.25rem 0.75rem;
+                        height: 100%;
+                        font-family: 'Source Sans Pro', sans-serif;
+                        font-size: 14px;
+                        font-weight: 400;
+                        line-height: 1.6;
+                        cursor: pointer;
+                        border-radius: 8px;
+                        border: 1px solid rgba(49, 51, 63, 0.2);
+                        background-color: white;
+                        color: rgb(49, 51, 63);
+                    "
+                    onmouseover="this.style.borderColor='rgb(255, 75, 75)'; this.style.color='rgb(255, 75, 75)';"
+                    onmouseout="this.style.borderColor='rgba(49, 51, 63, 0.2)'; this.style.color='rgb(49, 51, 63)';"
+                    >Copy Lineup</button>
+                    </body>
+                    </html>
+                """, height=36, scrolling=False)
+
     # Analysis Results
     st.divider()
     st.subheader("Analysis Results")
 
     if st.session_state.get('analyze_clicked', False):
         st.session_state.analyze_clicked = False
+
+        # Check for partially filled lineups
+        partial_lineups = []
+        for lineup_id, key in [("A", "lineup_a"), ("B", "lineup_b"), ("C", "lineup_c")]:
+            lineup = st.session_state[key]
+            filled_seats = [r for r in lineup if r is not None]
+            # Partially filled = has some rowers but not all seats filled
+            if filled_seats and len(filled_seats) < len(lineup):
+                partial_lineups.append(lineup_id)
+
+        if partial_lineups:
+            lineup_names = ", ".join([f"Lineup {lid}" for lid in partial_lineups])
+            st.error(f"{lineup_names} {'is' if len(partial_lineups) == 1 else 'are'} partially filled. Please fill all seats or clear the lineup before analyzing.")
+            # Skip analysis when there are partial lineups
+            st.session_state.analysis_skipped = True
+        else:
+            st.session_state.analysis_skipped = False
 
         results = []
 
@@ -2138,19 +2207,21 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                 return 'Mix'
             return 'M'  # Default
 
-        for lineup_id, key in [("A", "lineup_a"), ("B", "lineup_b"), ("C", "lineup_c")]:
-            lineup = st.session_state[key]
-            rower_names_in_lineup = [r for r in lineup if r is not None]
+        # Only run analysis if no partial lineups were detected
+        if not st.session_state.get('analysis_skipped', False):
+            for lineup_id, key in [("A", "lineup_a"), ("B", "lineup_b"), ("C", "lineup_c")]:
+                lineup = st.session_state[key]
+                rower_names_in_lineup = [r for r in lineup if r is not None]
 
-            if rower_names_in_lineup:
-                result = analyzer.analyze_lineup(rower_names_in_lineup, target_distance, boat_class, calc_method, pace_predictor)
-                result['lineup_id'] = lineup_id
-                # Store rower names for display formatting
-                result['rower_names'] = rower_names_in_lineup
-                result['lineup_display'] = format_lineup_display(lineup_id, rower_names_in_lineup, boat_class)
-                # Store lineup gender for erg-to-water conversion
-                result['lineup_gender'] = get_lineup_gender(rower_names_in_lineup)
-                results.append(result)
+                if rower_names_in_lineup:
+                    result = analyzer.analyze_lineup(rower_names_in_lineup, target_distance, boat_class, calc_method, pace_predictor)
+                    result['lineup_id'] = lineup_id
+                    # Store rower names for display formatting
+                    result['rower_names'] = rower_names_in_lineup
+                    result['lineup_display'] = format_lineup_display(lineup_id, rower_names_in_lineup, boat_class)
+                    # Store lineup gender for erg-to-water conversion
+                    result['lineup_gender'] = get_lineup_gender(rower_names_in_lineup)
+                    results.append(result)
 
         if results:
             # Sort by adjusted time
@@ -2533,7 +2604,9 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                 )
 
         else:
-            st.info("No lineups to analyze. Add rowers to at least one lineup.")
+            # Only show this message if analysis wasn't skipped due to partial lineups
+            if not st.session_state.get('analysis_skipped', False):
+                st.info("No lineups to analyze. Add rowers to at least one lineup.")
     else:
         st.info("Click 'Analyze All Lineups' in the sidebar to see results.")
 
