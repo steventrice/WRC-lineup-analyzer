@@ -1224,12 +1224,18 @@ class BoatAnalyzer:
         all_watts = []
         all_splits = []  # For split averaging method
 
+        # Calculate seat numbers in descending order (stroke = highest, bow = 1)
+        num_rowing_seats = len(rower_names)
+
         for seat_idx, name in enumerate(rower_names):
+            # Convert 0-indexed to rowing convention: stroke (idx 0) = highest seat number
+            seat_number = num_rowing_seats - seat_idx
+
             rower = self.roster.get_rower(name)
             if not rower:
                 projections.append({
                     'rower': name,
-                    'seat': seat_idx,
+                    'seat': seat_number,
                     'error': 'Rower not found'
                 })
                 continue
@@ -1243,7 +1249,7 @@ class BoatAnalyzer:
             if not closest_score:
                 projections.append({
                     'rower': name,
-                    'seat': seat_idx,
+                    'seat': seat_number,
                     'age': rower.age,
                     'side': rower.side_preference_str(),
                     'error': 'No scores available'
@@ -1295,7 +1301,7 @@ class BoatAnalyzer:
 
             projections.append({
                 'rower': name,
-                'seat': seat_idx,
+                'seat': seat_number,
                 'seat_side': seat_side,
                 'age': rower.age,
                 'side': rower.side_preference_str(),
