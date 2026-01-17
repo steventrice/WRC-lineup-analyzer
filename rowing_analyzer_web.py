@@ -1415,8 +1415,32 @@ def get_last_name_abbrev(full_name: str, length: int = 4) -> str:
     return last_name[:length].upper()
 
 
+def get_first_name(full_name: str) -> str:
+    """Extract first name from full name.
+
+    Args:
+        full_name: Full name like "John Smith" or "Smith, John"
+
+    Returns:
+        First name, e.g., "John"
+    """
+    if not full_name:
+        return "?"
+
+    # Handle "Last, First" format
+    if ',' in full_name:
+        parts = full_name.split(',')
+        if len(parts) > 1:
+            return parts[1].strip().split()[0]  # Get first word after comma
+        return full_name
+
+    # Handle "First Last" format - take the first word
+    parts = full_name.strip().split()
+    return parts[0] if parts else full_name
+
+
 def format_lineup_display(lineup_id: str, rower_names: List[str], boat_class: str) -> str:
-    """Format lineup display name with rower last names.
+    """Format lineup display name with rower first names.
 
     Args:
         lineup_id: Original lineup ID ("A", "B", "C")
@@ -1424,7 +1448,7 @@ def format_lineup_display(lineup_id: str, rower_names: List[str], boat_class: st
         boat_class: Boat class like "2x", "4+", "8+"
 
     Returns:
-        Formatted string like "A - SMIT / JONE" for pairs or "A - SMIT" for larger boats
+        Formatted string like "A - John/Jane" for pairs or "A - John" for larger boats
     """
     if not rower_names:
         return lineup_id
@@ -1432,18 +1456,18 @@ def format_lineup_display(lineup_id: str, rower_names: List[str], boat_class: st
     # Get number of seats from boat class
     num_seats = len(rower_names)
 
-    # For 1x - just show the single rower
+    # For 1x - just show the single rower's first name
     if num_seats == 1:
-        return f"{lineup_id} - {get_last_name_abbrev(rower_names[0])}"
+        return f"{lineup_id} - {get_first_name(rower_names[0])}"
 
-    # For 2x/2- - show "stroke / bow" format
+    # For 2x/2- - show "stroke / bow" format with first names
     if num_seats == 2:
-        stroke = get_last_name_abbrev(rower_names[0])
-        bow = get_last_name_abbrev(rower_names[1])
+        stroke = get_first_name(rower_names[0])
+        bow = get_first_name(rower_names[1])
         return f"{lineup_id} - {stroke}/{bow}"
 
-    # For larger boats (4+, 4-, 4x, 8+) - just show stroke's last name
-    stroke = get_last_name_abbrev(rower_names[0])
+    # For larger boats (4+, 4-, 4x, 8+) - just show stroke's first name
+    stroke = get_first_name(rower_names[0])
     return f"{lineup_id} - {stroke}"
 
 
@@ -2144,7 +2168,7 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                     table_data.append({
                         'Place': '-',
                         'Lineup': result.get('lineup_display', result['lineup_id']),
-                        'Rowers': '-',
+                        'Age': '-',
                         'Split': 'ERROR',
                         'Raw Time': result.get('error', 'Unknown'),
                         'Handicap': '-',
@@ -2173,10 +2197,15 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                         adjusted_time = apply_erg_to_water(result['adjusted_time'], boat_class, gender)
                         split_500m = apply_erg_to_water(result['boat_split_500m'], boat_class, gender)
 
+                    # Format age with masters category
+                    avg_age = result.get('avg_age', 0)
+                    masters_cat = get_masters_category(avg_age)
+                    age_display = f"{avg_age:.1f} ({masters_cat})"
+
                     table_data.append({
                         'Place': str(place),
                         'Lineup': result.get('lineup_display', result['lineup_id']),
-                        'Rowers': str(result['rower_count']),
+                        'Age': age_display,
                         'Split': format_split(split_500m),
                         'Raw Time': format_time(raw_time),
                         'Handicap': f"-{result['handicap_seconds']:.1f}s",
