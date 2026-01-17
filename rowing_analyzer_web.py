@@ -1767,27 +1767,28 @@ def main():
         pace_predictor = "power_law" if pace_predictor == "Power" else "pauls_law"
 
     with calc_col3:
-        erg_to_water = st.toggle(
-            "Erg-to-Water",
-            value=False,
-            help="""**Erg-to-Water Adjustment**: Convert erg scores to projected on-water times using BioRow/Kleshnev boat factors.
+        erg_water_col, tech_eff_col = st.columns([1, 1])
+        with erg_water_col:
+            erg_to_water = st.toggle(
+                "Erg-to-Water",
+                value=False,
+                help="""**Erg-to-Water Adjustment**: Convert erg scores to projected on-water times using BioRow/Kleshnev boat factors.
 
 **Formula**: On-Water Time = Erg Time × Boat Factor × Tech Efficiency
 
 Boat factors account for drag differences between erg and on-water rowing. Mixed boats average Men's and Women's factors."""
-        )
-        if erg_to_water:
+            )
+        with tech_eff_col:
             global_tech_efficiency = st.number_input(
-                "Tech Efficiency",
+                "Tech Eff",
                 min_value=0.90,
                 max_value=1.20,
                 value=1.05,
                 step=0.01,
                 format="%.2f",
+                disabled=not erg_to_water,
                 help="Technical efficiency multiplier. 1.05 = 5% slippage (typical for Masters/Club). Lower = more efficient crew."
             )
-        else:
-            global_tech_efficiency = DEFAULT_TECH_EFFICIENCY
 
     st.divider()
 
