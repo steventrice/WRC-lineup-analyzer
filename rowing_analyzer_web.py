@@ -2063,6 +2063,9 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
         ("Lineup C", "lineup_c", lineup_cols[2])
     ]
 
+    # Store per-lineup tech efficiency values for use in analysis
+    lineup_tech_efficiencies = {}
+
     for title, key, col in lineups_config:
         with col:
             lineup = st.session_state[key]
@@ -2085,6 +2088,10 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                     key=tech_key,
                     help=f"Override for {title}. 1.00 = National team | 1.05 = Excellent club | 1.10 = Intermediate club"
                 )
+                # Store the actual widget value for use in analysis
+                lineup_tech_efficiencies[key] = lineup_tech
+            else:
+                lineup_tech_efficiencies[key] = global_tech_efficiency
 
             stats = get_lineup_stats(lineup, roster_manager)
             if stats:
@@ -2261,9 +2268,8 @@ Boat factors account for drag differences between erg and on-water rowing. Mixed
                     result['lineup_display'] = format_lineup_display(lineup_id, rower_names_in_lineup, boat_class)
                     # Store lineup gender for erg-to-water conversion
                     result['lineup_gender'] = get_lineup_gender(rower_names_in_lineup)
-                    # Store per-lineup tech efficiency (from override or global)
-                    tech_key = f"tech_efficiency_{key}"
-                    result['tech_efficiency'] = st.session_state.get(tech_key, global_tech_efficiency)
+                    # Store per-lineup tech efficiency (from widget value captured earlier)
+                    result['tech_efficiency'] = lineup_tech_efficiencies.get(key, global_tech_efficiency)
                     results.append(result)
 
         if results:
