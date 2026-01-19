@@ -2136,7 +2136,15 @@ def main():
             # Copy lineup names to clipboard button
             rower_names_list = [r for r in lineup if r is not None]
             if rower_names_list:
-                names_text = "\n".join(rower_names_list)
+                # Format as "FirstName LastInitial" joined by dashes for single-cell pasting
+                short_names = []
+                for name in rower_names_list:
+                    parts = name.split()
+                    if len(parts) >= 2:
+                        short_names.append(f"{parts[0]} {parts[-1][0]}")
+                    else:
+                        short_names.append(name)
+                names_text = "-".join(short_names)
                 b64_names = base64.b64encode(names_text.encode('utf-8')).decode('ascii')
                 btn_id = f"copyLineup_{key}"
                 components.html(f"""
