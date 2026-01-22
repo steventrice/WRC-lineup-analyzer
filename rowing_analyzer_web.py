@@ -3788,6 +3788,17 @@ def main():
         # Also set the widget's key directly so it updates
         st.session_state.boat_class_select = new_boat
         del st.session_state.pending_boat_class
+
+    # Check for pending club boat assignment from Edit Entry
+    if 'pending_boat_a' in st.session_state:
+        new_club_boat = st.session_state.pending_boat_a
+        st.session_state.boat_a = new_club_boat
+        # Also set the widget's key directly so selectbox updates
+        if new_club_boat and new_club_boat in roster_manager.club_boats:
+            st.session_state.boat_select_lineup_a = new_club_boat
+        else:
+            st.session_state.boat_select_lineup_a = "(No boat assigned)"
+        del st.session_state.pending_boat_a
     with control_cols[2]:
         # Get the index for the current boat class
         current_boat_value = st.session_state.get('selected_boat_class', '4+')
@@ -4790,8 +4801,8 @@ def main():
                                         st.session_state.lineup_a = entry_rowers + [None] * (expected_seats - len(entry_rowers))
                                         st.session_state.cox_a = None
 
-                                    # Restore club boat assignment
-                                    st.session_state.boat_a = entry.get('boat', None)
+                                    # Restore club boat assignment (use pending flag for widget sync)
+                                    st.session_state.pending_boat_a = entry.get('boat', None)
 
                                     # Store original entry for edit mode
                                     st.session_state.editing_entry = entry.copy()
