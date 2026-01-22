@@ -794,6 +794,7 @@ class RosterManager:
         self.load_log: List[str] = []
         self.name_map: Dict[str, str] = {}  # Maps variations to canonical names
         self.regatta_events: Dict[str, List[RegattaEvent]] = {}  # keyed by "RegattaName|Day"
+        self.club_boats: List[str] = []  # List of club boat names
 
     def log(self, msg: str):
         self.load_log.append(msg)
@@ -898,6 +899,7 @@ class RosterManager:
             self._load_regatta_signups(gs_wrapper)
             self._load_score_sheets(gs_wrapper)
             self._load_regatta_events(gs_wrapper)
+            self._load_club_boats(gs_wrapper)
 
             self.log(f"Loaded {len(self.rowers)} rowers total from Google Sheets")
             return True
@@ -1492,6 +1494,41 @@ class RosterManager:
         self.log(f"Loaded {events_loaded} regatta events from {len(self.regatta_events)} regatta/day combinations")
         if self.regatta_events:
             self.log(f"  Event keys: {list(self.regatta_events.keys())}")
+
+    def _load_club_boats(self, xl):
+        """Load club boats from 'WRC Boats' sheet (only club-owned boats)"""
+        if 'WRC Boats' not in xl.sheet_names:
+            self.log("No 'WRC Boats' sheet found (optional)")
+            return
+
+        df = xl.parse('WRC Boats')
+        self.log(f"WRC Boats columns: {list(df.columns)}")
+
+        self.club_boats = []
+
+        # Expected columns: Name (A), Owner (B)
+        name_col = 'Name' if 'Name' in df.columns else df.columns[0] if len(df.columns) > 0 else None
+        owner_col = 'Owner' if 'Owner' in df.columns else df.columns[1] if len(df.columns) > 1 else None
+
+        if name_col is None:
+            self.log("No name column found in WRC Boats")
+            return
+
+        for _, row in df.iterrows():
+            boat_name = str(row.get(name_col, '')).strip()
+            owner = str(row.get(owner_col, '')).strip() if owner_col else ''
+
+            # Skip empty rows, headers, and section dividers
+            if not boat_name or boat_name == 'nan' or boat_name.lower() == 'name':
+                continue
+            if 'CLUB BOATS' in boat_name.upper() or 'PRIVATE BOATS' in boat_name.upper():
+                continue
+
+            # Only include club boats (Owner = "Willamette Rowing Club")
+            if owner.lower() == 'willamette rowing club':
+                self.club_boats.append(boat_name)
+
+        self.log(f"Loaded {len(self.club_boats)} club boats")
 
     def get_rower(self, name: str) -> Optional[Rower]:
         return self.rowers.get(name)
@@ -2116,6 +2153,7 @@ def load_entries_from_gsheet() -> List[dict]:
                 'category': record.get('Category', ''),
                 'avg_age': float(record.get('Avg Age', 0)) if record.get('Avg Age') else 0,
                 'rowers': parse_lineup_string(record.get('Lineup', ''), record.get('Boat Class', '')),
+                'boat': record.get('Boat', ''),  # Club boat assignment
                 'timestamp': record.get('Timestamp', ''),
                 'row_number': records.index(record) + 2  # +2 for header row and 0-indexing
             }
@@ -2148,6 +2186,7 @@ def save_entry_to_gsheet(entry: dict) -> bool:
             entry['category'],
             entry.get('avg_age', ''),
             lineup_str,
+            entry.get('boat', ''),  # Club boat assignment
             entry['timestamp']
         ]
         worksheet.append_row(row, value_input_option='USER_ENTERED')
@@ -2211,6 +2250,7 @@ def update_entry_in_gsheet(original_entry: dict, updated_entry: dict) -> bool:
                     updated_entry['category'],
                     updated_entry.get('avg_age', ''),
                     lineup_str,
+                    updated_entry.get('boat', ''),  # Club boat assignment
                     updated_entry['timestamp']
                 ]
                 # Update all cells in the row
@@ -2501,11 +2541,30 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
 
     # 3. Build athlete -> events mapping with conflict detection
     athlete_events = {athlete: {} for athlete in all_athletes}  # athlete -> {event_num: [entries]}
+    # Also track boat (equipment) usage
+    all_boats_used = set()  # All club boats used in entries
+    boat_events = {}  # boat_name -> {event_num: [entries]}
+
     for entry in dashboard_entries:
         event_num = entry.get('event_number')
         boat_class = entry.get('boat_class', '')
         entry_num = entry.get('entry_number', 1)
         rowers = entry.get('rowers', [])
+        club_boat = entry.get('boat', '')  # Club boat assignment
+
+        # Track boat usage
+        if club_boat and club_boat.strip():
+            all_boats_used.add(club_boat)
+            if club_boat not in boat_events:
+                boat_events[club_boat] = {}
+            if event_num not in boat_events[club_boat]:
+                boat_events[club_boat][event_num] = []
+            boat_events[club_boat][event_num].append({
+                'boat_class': boat_class,
+                'entry_num': entry_num,
+                'event_name': entry.get('event_name', ''),
+                'category': entry.get('category', '')
+            })
 
         # Check if missing cox
         needs_cox = False
@@ -2575,17 +2634,47 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
             athlete_colors[athlete][event_num] = color
             prev_time = event_time
 
+    # 4b. Calculate hot seating colors for each boat (equipment)
+    boat_colors = {boat: {} for boat in all_boats_used}
+    for boat in all_boats_used:
+        events_for_boat = []
+        for event_num, entries in boat_events[boat].items():
+            event_info = events_dict.get(event_num, {})
+            events_for_boat.append((event_num, event_info.get('parsed_time')))
+
+        # Sort by time
+        events_for_boat.sort(key=lambda x: x[1] or datetime.min)
+
+        prev_time = None
+        for i, (event_num, event_time) in enumerate(events_for_boat):
+            if i == 0:
+                color = "🟢"  # First event
+            else:
+                gap = get_minutes_between(prev_time, event_time)
+                if gap >= 90:
+                    color = "🟢"
+                elif gap >= 60:
+                    color = "🟡"
+                elif gap >= 30:
+                    color = "🟠"
+                else:
+                    color = "🔴"
+            boat_colors[boat][event_num] = color
+            prev_time = event_time
+
     # 5. Summary stats
     total_entries = len(dashboard_entries)
     total_targeted_events = len([e for e in sorted_events if True])  # All events in our list
     events_with_entries_count = len([e for e in sorted_events if e.get('has_entries', False)])
     athletes_with_hot_seats = sum(1 for a in athlete_colors if any(c in ['🟠', '🔴'] for c in athlete_colors[a].values()))
+    boats_with_hot_seats = sum(1 for b in boat_colors if any(c in ['🟠', '🔴'] for c in boat_colors[b].values()))
     conflicts = sum(1 for a in athlete_events for e in athlete_events[a].values() if len(e) > 1)
     needs_cox_count = sum(1 for entry in dashboard_entries if '+' in entry.get('boat_class', '') and len(entry.get('rowers', [])) < {'4+': 5, '8+': 9}.get(entry.get('boat_class', ''), 0))
+    needs_boat_count = sum(1 for entry in dashboard_entries if not entry.get('boat', '').strip())
 
     # Display summary
     st.subheader(f"📊 {regatta_name}")
-    summary_cols = st.columns(6)
+    summary_cols = st.columns(8)
     with summary_cols[0]:
         st.metric("Events", f"{events_with_entries_count}/{total_targeted_events}")
     with summary_cols[1]:
@@ -2598,11 +2687,21 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
         else:
             st.metric("Hot Seats", 0)
     with summary_cols[4]:
+        if boats_with_hot_seats > 0:
+            st.metric("🛶 Boat Hot Seats", boats_with_hot_seats)
+        else:
+            st.metric("Boat Hot Seats", 0)
+    with summary_cols[5]:
         if needs_cox_count > 0:
             st.metric("📣 Needs Cox", needs_cox_count)
         else:
             st.metric("Needs Cox", 0)
-    with summary_cols[5]:
+    with summary_cols[6]:
+        if needs_boat_count > 0:
+            st.metric("🚣 Needs Boat", needs_boat_count)
+        else:
+            st.metric("Needs Boat", 0)
+    with summary_cols[7]:
         if conflicts > 0:
             st.metric("⚠️ Conflicts", conflicts)
         else:
@@ -2821,6 +2920,49 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
 
             minimap_html += '</tr>'
 
+        # Add separator row if there are boats
+        if all_boats_used:
+            minimap_html += f'<tr><td class="athlete-name" style="background-color:#e8e8e8;font-weight:bold;border-top:2px solid #999;">🛶 Equipment</td>'
+            for _ in sorted_events:
+                minimap_html += '<td class="minimap-cell" style="border-top:2px solid #999;"></td>'
+            minimap_html += '</tr>'
+
+            # Add boat rows
+            for boat in sorted(all_boats_used):
+                # Abbreviate long names
+                display_name = boat if len(boat) <= 12 else boat[:10] + "..."
+                minimap_html += f'<tr><td class="athlete-name" title="{boat}" style="font-style:italic;">{display_name}</td>'
+
+                for event in sorted_events:
+                    event_num = event['number']
+                    has_entries = event.get('has_entries', False)
+
+                    if boat in boat_events and event_num in boat_events[boat]:
+                        entries = boat_events[boat][event_num]
+                        color = boat_colors[boat].get(event_num, "⚪")
+                        time_str = format_event_time_func(event['time']) if event['time'] else "?"
+
+                        # Map emoji color to CSS class
+                        color_class = {
+                            '🟢': 'minimap-green',
+                            '🟡': 'minimap-yellow',
+                            '🟠': 'minimap-orange',
+                            '🔴': 'minimap-red'
+                        }.get(color, 'minimap-gray')
+
+                        entry_info = entries[0]
+                        tooltip = f"{event['name']} @ {time_str}\\n{boat} ({entry_info['boat_class']})"
+
+                        minimap_html += f'<td class="minimap-cell {color_class}" title="{tooltip}"></td>'
+                    else:
+                        # Empty cell - gray if event exists but boat not used
+                        if has_entries:
+                            minimap_html += '<td class="minimap-cell minimap-gray"></td>'
+                        else:
+                            minimap_html += '<td class="minimap-cell minimap-empty"></td>'
+
+                minimap_html += '</tr>'
+
         minimap_html += "</tbody></table></div>"
 
         # Legend for minimap
@@ -2837,7 +2979,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
 
         st.markdown(minimap_html, unsafe_allow_html=True)
 
-        st.caption(f"Showing {len(all_athletes)} athletes × {len(sorted_events)} events")
+        st.caption(f"Showing {len(all_athletes)} athletes + {len(all_boats_used)} boats × {len(sorted_events)} events")
 
     # Show dialog if triggered
     if st.session_state.get('show_minimap', False):
@@ -2845,6 +2987,28 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
         show_minimap_dialog()
 
     st.divider()
+
+    # Equipment Schedule section (collapsible) - show only if boats are assigned
+    if all_boats_used:
+        with st.expander(f"🛶 Equipment Schedule ({len(all_boats_used)} boats)", expanded=False):
+            # Build compact schedule for each boat
+            for boat in sorted(all_boats_used):
+                if boat not in boat_events:
+                    continue
+                boat_schedule = []
+                for event_num in sorted(boat_events[boat].keys()):
+                    event_info = events_dict.get(event_num, {})
+                    time_str = format_event_time_func(event_info.get('time')) if event_info.get('time') else "?"
+                    color = boat_colors[boat].get(event_num, "⚪")
+                    entry = boat_events[boat][event_num][0]
+                    boat_schedule.append(f"{color} {time_str} - {entry['boat_class']} {entry['category']}")
+
+                st.markdown(f"**{boat}:** {' → '.join(boat_schedule)}")
+
+            # Show warning for boats with hot seats
+            hot_seat_boats = [b for b in all_boats_used if any(c in ['🟠', '🔴'] for c in boat_colors.get(b, {}).values())]
+            if hot_seat_boats:
+                st.warning(f"⚠️ Hot seat boats (tight turnaround): {', '.join(hot_seat_boats)}")
 
     # 6. Build and display the grid using HTML table for better formatting
     if len(sorted_events) == 0:
@@ -3457,6 +3621,14 @@ def main():
     if 'cox_c' not in st.session_state:
         st.session_state.cox_c = None
 
+    # Initialize boat assignment state for club boats
+    if 'boat_a' not in st.session_state:
+        st.session_state.boat_a = None
+    if 'boat_b' not in st.session_state:
+        st.session_state.boat_b = None
+    if 'boat_c' not in st.session_state:
+        st.session_state.boat_c = None
+
     # Initialize selected rower state
     if 'selected_rower' not in st.session_state:
         st.session_state.selected_rower = None
@@ -3593,6 +3765,9 @@ def main():
         st.session_state.cox_a = None
         st.session_state.cox_b = None
         st.session_state.cox_c = None
+        st.session_state.boat_a = None
+        st.session_state.boat_b = None
+        st.session_state.boat_c = None
 
     # Check for pending boat class change from Find Available Athletes
     if 'pending_boat_class' in st.session_state:
@@ -3642,6 +3817,9 @@ def main():
             st.session_state.cox_a = None
             st.session_state.cox_b = None
             st.session_state.cox_c = None
+            st.session_state.boat_a = None
+            st.session_state.boat_b = None
+            st.session_state.boat_c = None
             st.session_state.selected_rower = None
             st.rerun()
 
@@ -4056,6 +4234,7 @@ def main():
                         'category': f"{lineup_gender} {get_masters_category(avg_age) if avg_age >= 21 else 'AA'}",
                         'avg_age': round(avg_age, 1),
                         'rowers': rower_names,
+                        'boat': st.session_state.get('boat_a', ''),  # Club boat assignment
                         'timestamp': datetime.now().isoformat()
                     }
 
@@ -4087,6 +4266,7 @@ def main():
                 del st.session_state['editing_event']
                 st.session_state.lineup_a = [None] * num_seats
                 st.session_state.cox_a = None
+                st.session_state.boat_a = None
                 st.toast("Edit cancelled")
                 st.rerun()
 
@@ -4188,7 +4368,36 @@ def main():
             else:
                 st.markdown(f"**{title}**")
 
-            # Cox slot for coxed boats (4+, 8+) - displayed at top
+            # Boat assignment dropdown (club boats) - displayed at top
+            boat_key = f"boat_{key.split('_')[1]}"  # boat_a, boat_b, boat_c
+            current_boat = st.session_state.get(boat_key)
+            boat_options = ["(No boat assigned)"] + roster_manager.club_boats
+            current_boat_idx = 0
+            if current_boat and current_boat in roster_manager.club_boats:
+                current_boat_idx = roster_manager.club_boats.index(current_boat) + 1
+
+            boat_cols = st.columns([5, 1])
+            with boat_cols[0]:
+                selected_boat = st.selectbox(
+                    "Boat",
+                    options=boat_options,
+                    index=current_boat_idx,
+                    key=f"boat_select_{key}",
+                    label_visibility="collapsed"
+                )
+                # Update session state if changed
+                if selected_boat == "(No boat assigned)":
+                    if st.session_state.get(boat_key) is not None:
+                        st.session_state[boat_key] = None
+                elif selected_boat != st.session_state.get(boat_key):
+                    st.session_state[boat_key] = selected_boat
+            with boat_cols[1]:
+                if current_boat:
+                    if st.button("❌", key=f"remove_boat_{key}"):
+                        st.session_state[boat_key] = None
+                        st.rerun()
+
+            # Cox slot for coxed boats (4+, 8+)
             is_coxed_boat = '+' in boat_class
             cox_key = f"cox_{key.split('_')[1]}"  # cox_a, cox_b, cox_c
             if is_coxed_boat:
@@ -4262,34 +4471,40 @@ def main():
                             st.session_state[key][i] = None
                             st.rerun()
 
-            # Copy buttons (also copy cox for coxed boats)
+            # Copy buttons (also copy cox and boat for coxed boats)
             copy_cols = st.columns(2)
             if key == "lineup_a":
                 if copy_cols[0].button("A→B", key="copy_a_b", use_container_width=True):
                     st.session_state.lineup_b = st.session_state.lineup_a.copy()
                     st.session_state.cox_b = st.session_state.cox_a
+                    st.session_state.boat_b = st.session_state.boat_a
                     st.rerun()
                 if copy_cols[1].button("A→C", key="copy_a_c", use_container_width=True):
                     st.session_state.lineup_c = st.session_state.lineup_a.copy()
                     st.session_state.cox_c = st.session_state.cox_a
+                    st.session_state.boat_c = st.session_state.boat_a
                     st.rerun()
             elif key == "lineup_b":
                 if copy_cols[0].button("B→A", key="copy_b_a", use_container_width=True):
                     st.session_state.lineup_a = st.session_state.lineup_b.copy()
                     st.session_state.cox_a = st.session_state.cox_b
+                    st.session_state.boat_a = st.session_state.boat_b
                     st.rerun()
                 if copy_cols[1].button("B→C", key="copy_b_c", use_container_width=True):
                     st.session_state.lineup_c = st.session_state.lineup_b.copy()
                     st.session_state.cox_c = st.session_state.cox_b
+                    st.session_state.boat_c = st.session_state.boat_b
                     st.rerun()
             else:
                 if copy_cols[0].button("C→A", key="copy_c_a", use_container_width=True):
                     st.session_state.lineup_a = st.session_state.lineup_c.copy()
                     st.session_state.cox_a = st.session_state.cox_c
+                    st.session_state.boat_a = st.session_state.boat_c
                     st.rerun()
                 if copy_cols[1].button("C→B", key="copy_c_b", use_container_width=True):
                     st.session_state.lineup_b = st.session_state.lineup_c.copy()
                     st.session_state.cox_b = st.session_state.cox_c
+                    st.session_state.boat_b = st.session_state.boat_c
                     st.rerun()
 
             # Copy lineup names to clipboard button
@@ -4436,6 +4651,7 @@ def main():
                                     'category': f"{lineup_gender} {category}",
                                     'avg_age': round(avg_age, 1),
                                     'rowers': rower_names_list.copy(),
+                                    'boat': st.session_state.get(boat_key, ''),  # Club boat assignment
                                     'timestamp': datetime.now().isoformat()
                                 }
                                 # Save to Google Sheets
@@ -4494,6 +4710,11 @@ def main():
                 expected_count = {'4+': 5, '8+': 9}.get(boat, 0)
                 return len(rowers) < expected_count
 
+            # Helper to check if entry is missing boat assignment
+            def is_missing_boat(entry: dict) -> bool:
+                boat = entry.get('boat', '')
+                return not boat or boat.strip() == ''
+
             # Display event list with entry indicators
             for event in events:
                 priority_marker = "⭐ " if event.priority else ""
@@ -4505,15 +4726,23 @@ def main():
                 if event_entries:
                     # Show event with entry count as expander
                     entry_count = len(event_entries)
-                    # Check if any entry is missing cox
+                    # Check if any entry is missing cox or boat
                     any_missing_cox = any(is_missing_cox(e) for e in event_entries)
+                    any_missing_boat = any(is_missing_boat(e) for e in event_entries)
                     cox_warning = "📣 " if any_missing_cox else ""
-                    with st.expander(f"{format_event_time(event.event_time)} {priority_marker}{cox_warning}{event.event_name} [{entry_count}]"):
+                    boat_warning = "🚣 " if any_missing_boat else ""
+                    with st.expander(f"{format_event_time(event.event_time)} {priority_marker}{cox_warning}{boat_warning}{event.event_name} [{entry_count}]"):
                         for entry_idx, entry in enumerate(event_entries):
                             avg_age_display = entry.get('avg_age', '?')
-                            # Show warning if this entry is missing cox
-                            entry_cox_warning = "📣 Needs Cox" if is_missing_cox(entry) else ""
-                            st.markdown(f"**Entry {entry['entry_number']}** - {entry['boat_class']} {entry['category']} (Avg: {avg_age_display}) {entry_cox_warning}")
+                            # Show warnings if this entry is missing cox or boat
+                            entry_warnings = []
+                            if is_missing_cox(entry):
+                                entry_warnings.append("📣 Needs Cox")
+                            if is_missing_boat(entry):
+                                entry_warnings.append("🚣 Needs Boat")
+                            warning_str = " ".join(entry_warnings)
+                            boat_display = f" | Boat: {entry.get('boat')}" if entry.get('boat') else ""
+                            st.markdown(f"**Entry {entry['entry_number']}** - {entry['boat_class']} {entry['category']} (Avg: {avg_age_display}){boat_display} {warning_str}")
                             # Show rowers
                             rower_list = ", ".join(entry['rowers'])
                             st.caption(rower_list)
@@ -4549,6 +4778,9 @@ def main():
                                         st.session_state.lineup_a = entry_rowers + [None] * (expected_seats - len(entry_rowers))
                                         st.session_state.cox_a = None
 
+                                    # Restore club boat assignment
+                                    st.session_state.boat_a = entry.get('boat', None)
+
                                     # Store original entry for edit mode
                                     st.session_state.editing_entry = entry.copy()
                                     st.session_state.editing_event = event
@@ -4578,7 +4810,7 @@ def main():
             if st.session_state.event_entries:
                 st.divider()
                 # Create CSV data
-                csv_lines = ["Regatta,Day,Event Number,Event Name,Event Time,Entry Number,Boat Class,Category,Avg Age,Lineup,Timestamp"]
+                csv_lines = ["Regatta,Day,Event Number,Event Name,Event Time,Entry Number,Boat Class,Category,Avg Age,Lineup,Boat,Timestamp"]
                 for entry in st.session_state.event_entries:
                     lineup_str = format_lineup_string(entry['rowers'], entry['boat_class'])
                     # Escape commas in fields
@@ -4593,6 +4825,7 @@ def main():
                         f'"{entry["category"]}"',
                         str(entry.get('avg_age', '')),
                         f'"{lineup_str}"',
+                        f'"{entry.get("boat", "")}"',
                         entry['timestamp']
                     ]))
                 csv_data = "\n".join(csv_lines)
