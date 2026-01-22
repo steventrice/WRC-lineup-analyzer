@@ -30,6 +30,7 @@ NUL
 
 # Claude
 .claude/
+tmpclaude-*
 
 # Streamlit secrets (contains passwords)
 .streamlit/secrets.toml
