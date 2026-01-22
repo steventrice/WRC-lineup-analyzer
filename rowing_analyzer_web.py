@@ -1528,7 +1528,10 @@ class RosterManager:
             if owner.lower() == 'willamette rowing club':
                 self.club_boats.append(boat_name)
 
-        self.log(f"Loaded {len(self.club_boats)} club boats")
+        # Add "Private Boat" option at the end for any private equipment
+        self.club_boats.append("Private Boat")
+
+        self.log(f"Loaded {len(self.club_boats)} club boats (including Private Boat option)")
 
     def get_rower(self, name: str) -> Optional[Rower]:
         return self.rowers.get(name)
@@ -2552,8 +2555,8 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
         rowers = entry.get('rowers', [])
         club_boat = entry.get('boat', '')  # Club boat assignment
 
-        # Track boat usage
-        if club_boat and club_boat.strip():
+        # Track boat usage (exclude "Private Boat" from hot seat tracking)
+        if club_boat and club_boat.strip() and club_boat != "Private Boat":
             all_boats_used.add(club_boat)
             if club_boat not in boat_events:
                 boat_events[club_boat] = {}
@@ -2595,6 +2598,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                 athlete_events[rower][event_num].append({
                     'seat': seat,
                     'boat': boat_class,
+                    'club_boat': club_boat,  # Club boat name (equipment)
                     'entry_num': entry_num,
                     'needs_cox': needs_cox
                 })
@@ -3116,6 +3120,12 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
         .dashboard-table .cell-content {
             font-size: 13px;
         }
+        .dashboard-table .boat-name {
+            font-size: 9px;
+            color: #666;
+            display: block;
+            line-height: 1.1;
+        }
         .dashboard-table .conflict-cell {
             background-color: #ffcccc !important;
         }
@@ -3172,8 +3182,10 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                     cox_warning = "📣" if entry_info['needs_cox'] else ""
                     boat = entry_info['boat']
                     seat = entry_info['seat']
+                    club_boat = entry_info.get('club_boat', '')
+                    club_boat_display = f'<span class="boat-name">{club_boat}</span>' if club_boat else ''
                     # Tooltip with boat class
-                    html += f'<td title="{boat}"><span class="cell-content">{color} {seat}{cox_warning}</span></td>'
+                    html += f'<td title="{boat}"><span class="cell-content">{color} {seat}{cox_warning}</span>{club_boat_display}</td>'
             else:
                 # Empty cell - gray if event has no entries at all
                 cell_class = "no-entries-cell" if not has_entries else ""
