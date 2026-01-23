@@ -4854,38 +4854,20 @@ def main():
 
             # Determine which slot(s) we're filling and their locked rowers
             if autofill_target == "All (Top 3)":
-                # Check if any lineup has locked seats
-                locks_a = get_locked_rowers_for_slot('a')
-                locks_b = get_locked_rowers_for_slot('b')
-                locks_c = get_locked_rowers_for_slot('c')
-                any_locks = bool(locks_a or locks_b or locks_c)
+                # Check which lineups have locked seats
+                locks_by_slot = {
+                    'a': get_locked_rowers_for_slot('a'),
+                    'b': get_locked_rowers_for_slot('b'),
+                    'c': get_locked_rowers_for_slot('c')
+                }
+                slots_with_locks = [s for s, locks in locks_by_slot.items() if locks]
+                slots_without_locks = [s for s, locks in locks_by_slot.items() if not locks]
 
-                if any_locks:
-                    # If any lineup has locks, call separately for each so each respects its own locks
-                    all_optimal = []
-                    for slot, locked_rowers in [('a', locks_a), ('b', locks_b), ('c', locks_c)]:
-                        slot_lineups = lineup_optimizer.find_optimal_lineups(
-                            regatta=selected_regatta,
-                            num_seats=num_rowing_seats,
-                            boat_class=boat_class,
-                            target_distance=target_distance,
-                            calc_method=calc_method,
-                            predictor=pace_predictor,
-                            optimize_for=optimize_for,
-                            gender=effective_gender,
-                            min_avg_age=effective_min_avg_age,
-                            num_results=1,
-                            excluded_rowers=st.session_state.excluded_rowers,
-                            locked_rowers=locked_rowers
-                        )
-                        if slot_lineups:
-                            all_optimal.append(slot_lineups[0])
-                        else:
-                            all_optimal.append(None)
-                    optimal_lineups = [x for x in all_optimal if x is not None]
-                else:
-                    # No locks - use single call to get top 3 different lineups
-                    optimal_lineups = lineup_optimizer.find_optimal_lineups(
+                all_optimal = {'a': None, 'b': None, 'c': None}
+
+                # For slots WITH locks, call individually (they need their own results)
+                for slot in slots_with_locks:
+                    slot_lineups = lineup_optimizer.find_optimal_lineups(
                         regatta=selected_regatta,
                         num_seats=num_rowing_seats,
                         boat_class=boat_class,
@@ -4895,11 +4877,35 @@ def main():
                         optimize_for=optimize_for,
                         gender=effective_gender,
                         min_avg_age=effective_min_avg_age,
-                        num_results=3,
+                        num_results=1,
+                        excluded_rowers=st.session_state.excluded_rowers,
+                        locked_rowers=locks_by_slot[slot]
+                    )
+                    if slot_lineups:
+                        all_optimal[slot] = slot_lineups[0]
+
+                # For slots WITHOUT locks, get multiple different lineups in one call
+                if slots_without_locks:
+                    unlocked_lineups = lineup_optimizer.find_optimal_lineups(
+                        regatta=selected_regatta,
+                        num_seats=num_rowing_seats,
+                        boat_class=boat_class,
+                        target_distance=target_distance,
+                        calc_method=calc_method,
+                        predictor=pace_predictor,
+                        optimize_for=optimize_for,
+                        gender=effective_gender,
+                        min_avg_age=effective_min_avg_age,
+                        num_results=len(slots_without_locks),
                         excluded_rowers=st.session_state.excluded_rowers,
                         locked_rowers=None
                     )
-                    all_optimal = None  # Flag that we used single-call mode
+                    # Assign different lineups to each unlocked slot
+                    for i, slot in enumerate(slots_without_locks):
+                        if i < len(unlocked_lineups):
+                            all_optimal[slot] = unlocked_lineups[i]
+
+                optimal_lineups = [all_optimal[s] for s in ['a', 'b', 'c'] if all_optimal[s] is not None]
             else:
                 # Single lineup - get its locked rowers
                 target_slot = autofill_target.split()[-1].lower()  # "Lineup A" -> "a"
@@ -4959,54 +4965,29 @@ def main():
             else:
                 # Assign lineups to slots
                 if autofill_target == "All (Top 3)":
-                    if all_optimal is not None:
-                        # Per-slot mode (with locks) - all_optimal has results for [a, b, c] in order
-                        # Each may be a result dict or None if it failed
-                        for slot, lineup_data in zip(['a', 'b', 'c'], all_optimal):
-                            if lineup_data:
-                                rower_names = lineup_data['rowers']
+                    # all_optimal is a dict with keys 'a', 'b', 'c'
+                    for slot in ['a', 'b', 'c']:
+                        lineup_data = all_optimal.get(slot)
+                        if lineup_data:
+                            rower_names = lineup_data['rowers']
 
-                                # Resize lineup if needed
-                                while len(rower_names) < num_rowing_seats:
-                                    rower_names.append(None)
+                            # Resize lineup if needed
+                            while len(rower_names) < num_rowing_seats:
+                                rower_names.append(None)
 
-                                setattr_name = f'lineup_{slot}'
-                                st.session_state[setattr_name] = rower_names[:num_rowing_seats]
+                            setattr_name = f'lineup_{slot}'
+                            st.session_state[setattr_name] = rower_names[:num_rowing_seats]
 
-                                # Format time for toast
-                                if optimize_for == 'adjusted':
-                                    time_val = lineup_data['adjusted_time']
-                                    time_label = "adj"
-                                else:
-                                    time_val = lineup_data['raw_time']
-                                    time_label = "raw"
-                                time_str = format_time(time_val)
-                                age_str = f"Avg age: {lineup_data['avg_age']:.1f}"
-                                st.toast(f"Lineup {slot.upper()}: {time_str} {time_label} ({age_str})")
-                    else:
-                        # Single-call mode (no locks) - optimal_lineups has top 3 different lineups
-                        for i, slot in enumerate(['a', 'b', 'c']):
-                            if i < len(optimal_lineups):
-                                lineup_data = optimal_lineups[i]
-                                rower_names = lineup_data['rowers']
-
-                                # Resize lineup if needed
-                                while len(rower_names) < num_rowing_seats:
-                                    rower_names.append(None)
-
-                                setattr_name = f'lineup_{slot}'
-                                st.session_state[setattr_name] = rower_names[:num_rowing_seats]
-
-                                # Format time for toast
-                                if optimize_for == 'adjusted':
-                                    time_val = lineup_data['adjusted_time']
-                                    time_label = "adj"
-                                else:
-                                    time_val = lineup_data['raw_time']
-                                    time_label = "raw"
-                                time_str = format_time(time_val)
-                                age_str = f"Avg age: {lineup_data['avg_age']:.1f}"
-                                st.toast(f"Lineup {slot.upper()}: {time_str} {time_label} ({age_str})")
+                            # Format time for toast
+                            if optimize_for == 'adjusted':
+                                time_val = lineup_data['adjusted_time']
+                                time_label = "adj"
+                            else:
+                                time_val = lineup_data['raw_time']
+                                time_label = "raw"
+                            time_str = format_time(time_val)
+                            age_str = f"Avg age: {lineup_data['avg_age']:.1f}"
+                            st.toast(f"Lineup {slot.upper()}: {time_str} {time_label} ({age_str})")
                 else:
                     # Single lineup target
                     lineup_slots = []
