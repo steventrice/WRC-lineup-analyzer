@@ -4426,7 +4426,7 @@ def main():
             with settings_col3:
                 erg_to_water = st.toggle(
                     "Erg-to-Water",
-                    value=False,
+                    value=True,
                     help="""**Erg-to-Water Adjustment**: Convert erg scores to projected on-water times using BioRow/Kleshnev boat factors.
 
 **Formula**: On-Water Time = Erg Time × Boat Factor × Tech Efficiency × (Race Dist / Erg Dist)
