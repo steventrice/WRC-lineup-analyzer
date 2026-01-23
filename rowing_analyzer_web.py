@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Lineup Comparison - Streamlit Web App
+Lineup Sandbox - Streamlit Web App
 Analyzes potential boat lineups using Paul's Law and boat physics
 """
 
@@ -417,13 +417,24 @@ def parse_event_boat_class(event_name: str) -> Optional[str]:
 
 
 def parse_event_category(event_name: str) -> Optional[str]:
-    """Extract masters category letter from event name. Returns 'AA', 'A', 'B', etc."""
-    # Look for "Masters X" or "Masters X/Y" patterns
-    match = re.search(r'Masters\s+([A-J]{1,2}(?:/[A-J])?)', event_name, re.IGNORECASE)
-    if match:
+    """Extract masters category from event name.
+
+    Handles both formats:
+    - Letter categories: 'Masters A', 'Masters B/C' -> 'A', 'B'
+    - Age categories: 'Masters 30+', 'Masters 40+' -> '30+', '40+'
+    """
+    # First try age-based format: "30+", "40+", "50+", etc.
+    age_match = re.search(r'(\d{2})\+', event_name)
+    if age_match:
+        return f"{age_match.group(1)}+"
+
+    # Then try letter format: "Masters X" or "Masters X/Y" patterns
+    letter_match = re.search(r'Masters\s+([A-J]{1,2}(?:/[A-J])?)', event_name, re.IGNORECASE)
+    if letter_match:
         # Return first category letter (e.g., "B" from "B/C")
-        cat = match.group(1).upper()
+        cat = letter_match.group(1).upper()
         return cat.split('/')[0] if '/' in cat else cat
+
     # Check for "Open" events (no age restriction)
     if 'open' in event_name.lower():
         return 'Open'
@@ -436,14 +447,27 @@ def get_event_shorthand(event_name: str) -> str:
     boat = parse_event_boat_class(event_name)
 
     # Map gender to prefix
-    prefix = {'M': 'M', 'W': 'W', 'Mix': 'Mx'}.get(gender, '?')
-    boat_str = boat if boat else '?'
+    prefix = {'M': 'M', 'W': 'W', 'Mix': 'Mx'}.get(gender, '')
+    boat_str = boat if boat else ''
 
     return f"{prefix}{boat_str}"
 
 
 def get_category_min_age(category: str) -> int:
-    """Get minimum average age for a masters category."""
+    """Get minimum average age for a masters category.
+
+    Handles both formats:
+    - Letter categories: 'A' -> 27, 'B' -> 36, etc.
+    - Age categories: '30+' -> 30, '40+' -> 40, etc.
+    """
+    # Handle age-based format first (e.g., "30+", "40+")
+    if category and category.endswith('+'):
+        try:
+            return int(category[:-1])
+        except ValueError:
+            pass
+
+    # Handle letter-based format
     category_ages = {
         'AA': 21, 'A': 27, 'B': 36, 'C': 43, 'D': 50,
         'E': 55, 'F': 60, 'G': 65, 'H': 70, 'I': 75, 'J': 80,
@@ -1782,6 +1806,471 @@ class BoatAnalyzer:
 
 
 # =============================================================================
+# LINEUP OPTIMIZER
+# =============================================================================
+
+class LineupOptimizer:
+    """Finds optimal lineup combinations based on erg scores and constraints."""
+
+    # Maximum combinations before switching from exhaustive to heuristic search
+    # C(20,8) = 125,970 combinations takes ~1-2 seconds, which is acceptable
+    MAX_EXHAUSTIVE_COMBINATIONS = 150000
+
+    def __init__(self, roster: RosterManager, analyzer: BoatAnalyzer):
+        self.roster = roster
+        self.analyzer = analyzer
+
+    def get_eligible_rowers(self, regatta: str, gender: Optional[str] = None,
+                            min_age: int = 0) -> List[Rower]:
+        """Get rowers eligible based on regatta attendance, gender, and age constraints.
+
+        Args:
+            regatta: Regatta key (or "__all__" for all rowers)
+            gender: 'M', 'W', or None for no filter
+            min_age: Minimum individual age (not average), default 0
+
+        Returns:
+            List of eligible Rower objects with erg scores
+        """
+        # Get rower list based on regatta
+        if regatta == "__all__":
+            rower_names = self.roster.get_all_rowers()
+        else:
+            # Handle regatta|day format
+            regatta_for_filter = regatta.split("|")[0] if "|" in regatta else regatta
+            regatta_lower = regatta_for_filter.lower()
+            rower_names = []
+            for name, rower in self.roster.rowers.items():
+                # Direct match or partial match
+                if rower.is_attending(regatta_for_filter):
+                    rower_names.append(name)
+                else:
+                    for signup_regatta, attending in rower.regatta_signups.items():
+                        if attending and (regatta_lower in signup_regatta.lower() or
+                                         signup_regatta.lower() in regatta_lower):
+                            rower_names.append(name)
+                            break
+
+        eligible = []
+        for name in rower_names:
+            rower = self.roster.get_rower(name)
+            if not rower:
+                continue
+            # Must have at least one erg score
+            if not rower.scores:
+                continue
+            # Gender filter
+            if gender == 'M' and rower.gender != 'M':
+                continue
+            if gender == 'W' and rower.gender != 'F':
+                continue
+            # Age filter (individual must meet minimum)
+            if rower.age < min_age:
+                continue
+            eligible.append(rower)
+
+        return eligible
+
+    def project_rower_watts(self, rower: Rower, target_distance: int,
+                            predictor: str = 'power_law') -> Optional[float]:
+        """Get projected watts for a rower at target distance.
+
+        Args:
+            rower: Rower object
+            target_distance: Target distance in meters
+            predictor: 'power_law' or 'pauls_law'
+
+        Returns:
+            Projected watts or None if no score available
+        """
+        # Check for exact distance score first
+        score = rower.scores.get(target_distance)
+        if score:
+            return score.watts
+
+        closest_score = rower.get_closest_score(target_distance)
+        if not closest_score:
+            return None
+
+        if predictor == 'power_law':
+            # Try Power Law first
+            projected_split = rower.project_split_power_law(target_distance)
+            if projected_split and projected_split > 0:
+                return PhysicsEngine.split_to_watts(projected_split)
+
+        # Fall back to Paul's Law
+        projected_split = PhysicsEngine.pauls_law_projection(
+            closest_score.split_500m, closest_score.distance, target_distance
+        )
+        return PhysicsEngine.split_to_watts(projected_split)
+
+    def _can_row_seat(self, rower: Rower, seat_idx: int, boat_class: str) -> bool:
+        """Check if rower can row the given seat based on side preference.
+
+        For sweep boats:
+        - Even seat indices (0, 2, 4, 6) = Starboard
+        - Odd seat indices (1, 3, 5, 7) = Port
+
+        For sculling boats, always returns True.
+        """
+        is_sculling = 'x' in boat_class.lower()
+        if is_sculling:
+            return True
+
+        # Sweep boat - check side preference
+        if seat_idx % 2 == 0:  # Starboard seat
+            return rower.side_starboard
+        else:  # Port seat
+            return rower.side_port
+
+    def _is_valid_seat_assignment(self, rowers: List[Rower], boat_class: str) -> bool:
+        """Check if all rowers can row their assigned seats."""
+        for idx, rower in enumerate(rowers):
+            if not self._can_row_seat(rower, idx, boat_class):
+                return False
+        return True
+
+    def _optimize_seat_assignment(self, rowers: List[Rower], boat_class: str) -> Optional[List[Rower]]:
+        """Find optimal seat assignment for sweep boats based on side preferences.
+
+        Returns None if no valid assignment exists.
+        """
+        is_sculling = 'x' in boat_class.lower()
+        if is_sculling:
+            return rowers  # No seat optimization needed
+
+        from itertools import permutations
+
+        num_seats = len(rowers)
+
+        # For small crews, try all permutations
+        if num_seats <= 4:
+            for perm in permutations(rowers):
+                perm_list = list(perm)
+                if self._is_valid_seat_assignment(perm_list, boat_class):
+                    return perm_list
+            return None
+
+        # For 8+, use greedy assignment to avoid factorial explosion
+        # Separate rowers by side preference
+        port_only = [r for r in rowers if r.side_port and not r.side_starboard]
+        starboard_only = [r for r in rowers if r.side_starboard and not r.side_port]
+        both = [r for r in rowers if r.side_port and r.side_starboard]
+
+        # Need 4 port seats (odd indices: 1,3,5,7) and 4 starboard seats (even indices: 0,2,4,6)
+        port_needed = num_seats // 2
+        starboard_needed = num_seats // 2
+
+        if len(port_only) > port_needed or len(starboard_only) > starboard_needed:
+            return None  # Too many single-side rowers
+
+        # Assign single-side rowers first
+        port_rowers = port_only.copy()
+        starboard_rowers = starboard_only.copy()
+
+        # Fill remaining slots with "both" rowers
+        remaining = both.copy()
+        while len(port_rowers) < port_needed and remaining:
+            port_rowers.append(remaining.pop(0))
+        while len(starboard_rowers) < starboard_needed and remaining:
+            starboard_rowers.append(remaining.pop(0))
+
+        if len(port_rowers) != port_needed or len(starboard_rowers) != starboard_needed:
+            return None
+
+        # Interleave: stroke(0)=S, 7(1)=P, 6(2)=S, 5(3)=P, ...
+        result = []
+        for i in range(num_seats):
+            if i % 2 == 0:  # Starboard
+                result.append(starboard_rowers.pop(0) if starboard_rowers else None)
+            else:  # Port
+                result.append(port_rowers.pop(0) if port_rowers else None)
+
+        if None in result:
+            return None
+        return result
+
+    def find_optimal_lineups(self, regatta: str, num_seats: int, boat_class: str,
+                             target_distance: int, calc_method: str = 'watts',
+                             predictor: str = 'power_law', optimize_for: str = 'raw',
+                             gender: str = "Men's", min_avg_age: int = 0,
+                             num_results: int = 3) -> List[Dict]:
+        """Find optimal lineup combinations.
+
+        Args:
+            regatta: Regatta key for filtering rowers
+            num_seats: Number of rowing seats needed
+            boat_class: Boat class (e.g., '4+', '8+', '2x')
+            target_distance: Target erg distance
+            calc_method: 'watts' or 'split' averaging
+            predictor: 'power_law' or 'pauls_law'
+            optimize_for: 'raw' for fastest raw time, 'adjusted' for handicap-adjusted
+            gender: "Men's", "Women's", or "Mixed"
+            min_avg_age: Minimum average age for the lineup
+            num_results: Number of top lineups to return
+
+        Returns:
+            List of dicts with 'rowers', 'raw_time', 'adjusted_time', 'avg_age'
+        """
+        from itertools import combinations
+        import math as math_module
+
+        # Map UI gender to filter gender
+        gender_filter = None
+        if gender == "Men's":
+            gender_filter = 'M'
+        elif gender == "Women's":
+            gender_filter = 'W'
+        # Mixed = None (no filter, but we'll verify mix in lineup)
+
+        # Get eligible rowers
+        eligible = self.get_eligible_rowers(regatta, gender_filter, min_age=0)
+
+        if len(eligible) < num_seats:
+            return []
+
+        # Pre-compute projected watts for all eligible rowers
+        rower_watts = {}
+        for rower in eligible:
+            watts = self.project_rower_watts(rower, target_distance, predictor)
+            if watts and watts > 0:
+                rower_watts[rower.name] = watts
+
+        # Filter to only rowers with valid projections
+        eligible = [r for r in eligible if r.name in rower_watts]
+
+        if len(eligible) < num_seats:
+            return []
+
+        # Calculate number of combinations
+        n = len(eligible)
+        k = num_seats
+        num_combinations = math_module.comb(n, k)
+
+        results = []
+
+        # For adjusted optimization, compute handicap-adjusted score for each rower
+        # This helps the heuristic search consider age benefits
+        rower_adjusted_score = {}
+        if optimize_for == 'adjusted':
+            # Handicap formula: adjusted_time = raw_time - ((avg_age - 27)^2) * k * distance_mult
+            # OLDER crews get MORE seconds subtracted, so LOWER adjusted time (faster)
+            # For individual ranking, we want rowers who contribute to lower adjusted time:
+            #   - Higher watts (lower raw time contribution)
+            #   - Higher age (more handicap benefit when averaged into lineup)
+            k_factor = 0.02
+            distance_multiplier = target_distance / 1000
+            for rower in eligible:
+                watts = rower_watts.get(rower.name, 0)
+                # Calculate this rower's handicap contribution (seconds that would be subtracted)
+                handicap_benefit = ((rower.age - 27) ** 2) * k_factor * distance_multiplier
+                # Convert handicap seconds to approximate watts equivalent
+                # ~4 watts ≈ 1 second at typical splits (rough approximation)
+                watts_equivalent_bonus = handicap_benefit * 4
+                # Higher score = better for adjusted time (fast + old)
+                rower_adjusted_score[rower.name] = watts + watts_equivalent_bonus
+        elif optimize_for == 'category':
+            # For category optimization: find fastest raw time that meets min_avg_age
+            # Favor fast rowers, but also consider age to help meet the category minimum
+            # We want rowers who are: fast AND old enough to help meet the threshold
+            for rower in eligible:
+                watts = rower_watts.get(rower.name, 0)
+                # Small bonus for being above min_avg_age (helps ensure we meet threshold)
+                # But primary factor is still speed (watts)
+                age_bonus = 0
+                if min_avg_age > 0 and rower.age >= min_avg_age:
+                    # Rower meets category on their own - small bonus
+                    age_bonus = 10  # Small watts-equivalent bonus
+                rower_adjusted_score[rower.name] = watts + age_bonus
+        else:
+            rower_adjusted_score = rower_watts.copy()
+
+        # Debug counters
+        debug_counts = {'age_rejected': 0, 'gender_rejected': 0, 'seat_rejected': 0, 'total_tried': 0}
+
+        if num_combinations <= self.MAX_EXHAUSTIVE_COMBINATIONS:
+            # Exhaustive search - evaluate ALL combinations
+            for combo in combinations(eligible, num_seats):
+                debug_counts['total_tried'] += 1
+                result = self._evaluate_lineup(
+                    list(combo), boat_class, target_distance, calc_method, predictor,
+                    gender, min_avg_age, rower_watts, debug_counts
+                )
+                if result:
+                    results.append(result)
+        else:
+            # Heuristic search: greedy with diversity
+            seen_combos = set()
+
+            # For adjusted optimization, first try age-optimized combinations
+            if optimize_for == 'adjusted':
+                # Sort by age descending (older = more handicap benefit)
+                age_sorted = sorted(eligible, key=lambda r: r.age, reverse=True)
+                # Try top N oldest rowers as a baseline
+                if len(age_sorted) >= num_seats:
+                    oldest_combo = age_sorted[:num_seats]
+                    combo_key = tuple(sorted(r.name for r in oldest_combo))
+                    seen_combos.add(combo_key)
+                    debug_counts['total_tried'] += 1
+                    result = self._evaluate_lineup(
+                        oldest_combo, boat_class, target_distance, calc_method, predictor,
+                        gender, min_avg_age, rower_watts, debug_counts
+                    )
+                    if result:
+                        results.append(result)
+
+            # Sort by appropriate score (raw watts or adjusted score)
+            sort_score = rower_adjusted_score if optimize_for == 'adjusted' else rower_watts
+            sorted_rowers = sorted(eligible, key=lambda r: sort_score.get(r.name, 0), reverse=True)
+
+            # Also try the top-scored rowers as another baseline
+            if len(sorted_rowers) >= num_seats:
+                top_combo = sorted_rowers[:num_seats]
+                combo_key = tuple(sorted(r.name for r in top_combo))
+                if combo_key not in seen_combos:
+                    seen_combos.add(combo_key)
+                    debug_counts['total_tried'] += 1
+                    result = self._evaluate_lineup(
+                        top_combo, boat_class, target_distance, calc_method, predictor,
+                        gender, min_avg_age, rower_watts, debug_counts
+                    )
+                    if result:
+                        results.append(result)
+
+            # For category optimization, try strategic age-balanced combinations
+            if optimize_for == 'category' and min_avg_age > 0:
+                # Sort by age and watts separately
+                by_age = sorted(eligible, key=lambda r: r.age, reverse=True)
+                by_watts = sorted(eligible, key=lambda r: rower_watts.get(r.name, 0), reverse=True)
+
+                # Try mixing: N fastest + (seats-N) oldest, for various N
+                for num_fast in range(num_seats + 1):
+                    num_old = num_seats - num_fast
+                    fast_rowers = by_watts[:num_fast]
+                    # Get oldest rowers not already in fast list
+                    old_rowers = [r for r in by_age if r not in fast_rowers][:num_old]
+
+                    if len(fast_rowers) + len(old_rowers) == num_seats:
+                        combo = fast_rowers + old_rowers
+                        combo_key = tuple(sorted(r.name for r in combo))
+                        if combo_key not in seen_combos:
+                            seen_combos.add(combo_key)
+                            debug_counts['total_tried'] += 1
+                            result = self._evaluate_lineup(
+                                combo, boat_class, target_distance, calc_method, predictor,
+                                gender, min_avg_age, rower_watts, debug_counts
+                            )
+                            if result:
+                                results.append(result)
+
+            # Generate diverse lineups by varying top selections
+            attempts = 0
+            max_attempts = self.MAX_EXHAUSTIVE_COMBINATIONS
+            # Ensure we explore at least 100 valid candidates for better diversity
+            min_candidates = max(100, num_results * 20)
+
+            while len(results) < min_candidates and attempts < max_attempts:
+                # Greedy selection with some randomization
+                import random
+                pool = sorted_rowers.copy()
+                selected = []
+
+                for _ in range(num_seats):
+                    if not pool:
+                        break
+                    # Take from top candidates with weighted random (more diversity for adjusted)
+                    top_n = 5 if optimize_for == 'adjusted' else 3
+                    candidates = pool[:min(top_n, len(pool))]
+                    weights = list(range(top_n, 0, -1))[:len(candidates)]
+                    chosen = random.choices(candidates, weights=weights)[0]
+                    selected.append(chosen)
+                    pool.remove(chosen)
+
+                if len(selected) == num_seats:
+                    combo_key = tuple(sorted(r.name for r in selected))
+                    if combo_key not in seen_combos:
+                        seen_combos.add(combo_key)
+                        debug_counts['total_tried'] += 1
+                        result = self._evaluate_lineup(
+                            selected, boat_class, target_distance, calc_method, predictor,
+                            gender, min_avg_age, rower_watts, debug_counts
+                        )
+                        if result:
+                            results.append(result)
+
+                attempts += 1
+
+        # Sort by optimization target
+        if optimize_for == 'adjusted':
+            results.sort(key=lambda x: x['adjusted_time'])
+        else:
+            # Both 'raw' and 'category' sort by raw_time
+            results.sort(key=lambda x: x['raw_time'])
+
+
+        # Debug: log top results for category mode
+        if optimize_for == 'category' and results:
+            top_3 = results[:3]
+            debug_info = [f"{r['raw_time']:.1f}s (age {r['avg_age']:.1f})" for r in top_3]
+            st.toast(f"Top {len(top_3)} by raw time: {', '.join(debug_info)}")
+
+        return results[:num_results]
+
+    def _evaluate_lineup(self, rowers: List[Rower], boat_class: str, target_distance: int,
+                         calc_method: str, predictor: str, gender: str, min_avg_age: int,
+                         rower_watts: Dict[str, float], debug_counts: Dict = None) -> Optional[Dict]:
+        """Evaluate a lineup combination and return results if valid."""
+        # Check average age constraint
+        avg_age = statistics.mean([r.age for r in rowers])
+        if avg_age < min_avg_age:
+            if debug_counts is not None:
+                debug_counts['age_rejected'] = debug_counts.get('age_rejected', 0) + 1
+            return None
+
+        # Check mixed gender requirement
+        if gender == "Mixed":
+            genders = set(r.gender for r in rowers)
+            if 'M' not in genders or 'F' not in genders:
+                if debug_counts is not None:
+                    debug_counts['gender_rejected'] = debug_counts.get('gender_rejected', 0) + 1
+                return None
+
+        # For sweep boats, find valid seat assignment
+        is_sculling = 'x' in boat_class.lower()
+        if not is_sculling:
+            assigned = self._optimize_seat_assignment(rowers, boat_class)
+            if assigned is None:
+                if debug_counts is not None:
+                    debug_counts['seat_rejected'] = debug_counts.get('seat_rejected', 0) + 1
+                return None
+            rowers = assigned
+
+        # Calculate lineup time using BoatAnalyzer
+        rower_names = [r.name for r in rowers]
+        analysis = self.analyzer.analyze_lineup(
+            rower_names, target_distance, boat_class, calc_method, predictor
+        )
+
+        if 'error' in analysis and 'raw_time' not in analysis:
+            return None
+
+        raw_time = analysis.get('raw_time', float('inf'))
+        adjusted_time = analysis.get('adjusted_time', float('inf'))
+
+        if raw_time == float('inf'):
+            return None
+
+        return {
+            'rowers': rower_names,
+            'rower_objects': rowers,
+            'raw_time': raw_time,
+            'adjusted_time': adjusted_time,
+            'avg_age': avg_age,
+            'analysis': analysis
+        }
+
+
+# =============================================================================
 # UTILITIES
 # =============================================================================
 
@@ -1814,7 +2303,7 @@ def get_last_name_abbrev(full_name: str, length: int = 4) -> str:
         Abbreviated last name in uppercase, e.g., "SMIT"
     """
     if not full_name:
-        return "????"
+        return "----"
 
     # Handle "Last, First" format
     if ',' in full_name:
@@ -1837,7 +2326,7 @@ def get_first_name(full_name: str) -> str:
         First name, e.g., "John"
     """
     if not full_name:
-        return "?"
+        return "-"
 
     # Handle "Last, First" format
     if ',' in full_name:
@@ -2869,7 +3358,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
         # Add event headers (shorthand)
         for event in sorted_events:
             shorthand = get_event_shorthand(event['name'])
-            time_str = format_event_time_func(event['time']) if event['time'] else "?"
+            time_str = format_event_time_func(event['time']) if event['time'] else ""
             tooltip = f"{event['name']} @ {time_str}"
             minimap_html += f'<th title="{tooltip}">{shorthand}</th>'
 
@@ -2891,7 +3380,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
 
                     # Check for conflict
                     if len(entries) > 1:
-                        time_str = format_event_time_func(event['time']) if event['time'] else "?"
+                        time_str = format_event_time_func(event['time']) if event['time'] else ""
                         tooltip = f"CONFLICT: {event['name']} @ {time_str}"
                         minimap_html += f'<td class="minimap-cell minimap-conflict" title="{tooltip}"></td>'
                     else:
@@ -2899,7 +3388,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                         needs_cox = entry_info['needs_cox']
                         seat = entry_info['seat']
                         boat = entry_info['boat']
-                        time_str = format_event_time_func(event['time']) if event['time'] else "?"
+                        time_str = format_event_time_func(event['time']) if event['time'] else ""
 
                         # Map emoji color to CSS class
                         color_class = {
@@ -2944,7 +3433,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                     if boat in boat_events and event_num in boat_events[boat]:
                         entries = boat_events[boat][event_num]
                         color = boat_colors[boat].get(event_num, "⚪")
-                        time_str = format_event_time_func(event['time']) if event['time'] else "?"
+                        time_str = format_event_time_func(event['time']) if event['time'] else ""
 
                         # Map emoji color to CSS class
                         color_class = {
@@ -3002,7 +3491,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                 boat_schedule = []
                 for event_num in sorted(boat_events[boat].keys()):
                     event_info = events_dict.get(event_num, {})
-                    time_str = format_event_time_func(event_info.get('time')) if event_info.get('time') else "?"
+                    time_str = format_event_time_func(event_info.get('time')) if event_info.get('time') else ""
                     color = boat_colors[boat].get(event_num, "⚪")
                     entry = boat_events[boat][event_num][0]
                     boat_schedule.append(f"{color} {time_str} - {entry['boat_class']} {entry['category']}")
@@ -3146,7 +3635,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
 
     # Add event headers
     for event in sorted_events:
-        time_display = format_event_time_func(event['time']) if event['time'] else "?"
+        time_display = format_event_time_func(event['time']) if event['time'] else ""
         event_name = event['name']
         has_entries = event.get('has_entries', False)
         header_class = "event-header" if has_entries else "event-header no-entries-header"
@@ -3222,7 +3711,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
     # Create selectbox options
     event_options = {"-- Select an event --": None}
     for evt in events_needing_athletes:
-        time_display = format_event_time_func(evt['time']) if evt['time'] else "?"
+        time_display = format_event_time_func(evt['time']) if evt['time'] else ""
         entry_count = f" [{evt['current_entries']} entries]" if evt['current_entries'] > 0 else " [no entries]"
         label = f"{time_display} - {evt['name']}{entry_count}"
         event_options[label] = evt
@@ -3550,7 +4039,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                     st.markdown(f"**{athlete['name']}**{events_badge}")
                 with col3:
                     gender_display = "♀" if athlete['gender'] == 'F' else "♂"
-                    st.caption(f"{gender_display} {athlete['age'] or '?'}y")
+                    st.caption(f"{gender_display} {athlete['age'] or '-'}y")
                 with col4:
                     if athlete['min_gap'] is not None:
                         st.caption(f"{int(athlete['min_gap'])}min gap")
@@ -3659,6 +4148,16 @@ def main():
     if 'selected_regatta_display' not in st.session_state:
         st.session_state.selected_regatta_display = "All Rowers"
 
+    # Initialize autofill settings
+    if 'autofill_gender' not in st.session_state:
+        st.session_state.autofill_gender = "Men's"
+    if 'autofill_target' not in st.session_state:
+        st.session_state.autofill_target = "Lineup A"
+    if 'autofill_use_event_constraints' not in st.session_state:
+        st.session_state.autofill_use_event_constraints = False
+    if 'autofill_checked_events' not in st.session_state:
+        st.session_state.autofill_checked_events = set()
+
     # =========================================================================
     # HEADER: Logo, Title, and View Toggle
     # =========================================================================
@@ -3668,26 +4167,24 @@ def main():
         st.image("wrc-badge-red.png", width=50)
     with title_cols[1]:
         if st.session_state.view_mode == 'lineup':
-            st.markdown("### Lineup Comparison")
+            st.markdown("### Lineup Sandbox")
         else:
             st.markdown("### Regatta Dashboard")
     with title_cols[2]:
         if st.session_state.view_mode == 'lineup':
-            if st.button("📊 Dashboard", use_container_width=True):
+            if st.button("📊 Switch to Regatta Dashboard", type="primary", use_container_width=True):
                 st.session_state.view_mode = 'dashboard'
                 st.rerun()
         else:
-            if st.button("🚣 Lineups", use_container_width=True):
+            if st.button("🚣 Switch to Lineup Sandbox", type="primary", use_container_width=True):
                 st.session_state.view_mode = 'lineup'
                 st.rerun()
 
     # =========================================================================
-    # CONTROLS: Regatta, Distance, Boat, Analyze, Clear All, Reload
+    # CONTROLS: Regatta (always), plus Distance, Boat, etc. (lineup mode only)
     # =========================================================================
 
-    control_cols = st.columns([2, 2, 2, 2, 2, 2])
-
-    # Regatta selection
+    # Regatta selection - always visible
     regatta_options = {"All Rowers": "__all__"}
 
     # First, group events by regatta name to know which have events and how many days
@@ -3730,33 +4227,66 @@ def main():
             display = roster_manager.regatta_display_names.get(col, col)
             regatta_options[display] = col
 
-    with control_cols[0]:
-        # Get default index from session state
-        regatta_options_list = list(regatta_options.keys())
-        default_index = 0
-        if st.session_state.selected_regatta_display in regatta_options_list:
-            default_index = regatta_options_list.index(st.session_state.selected_regatta_display)
+    # Get default index from session state
+    regatta_options_list = list(regatta_options.keys())
+    default_index = 0
+    if st.session_state.selected_regatta_display in regatta_options_list:
+        default_index = regatta_options_list.index(st.session_state.selected_regatta_display)
 
+    # Different layouts for Dashboard vs Lineup Sandbox
+    if st.session_state.view_mode == 'lineup':
+        # Lineup mode: show all controls in a row
+        control_cols = st.columns([2, 2, 2, 2, 2, 2])
+        with control_cols[0]:
+            selected_regatta_display = st.selectbox(
+                "Regatta",
+                options=regatta_options_list,
+                index=default_index,
+                label_visibility="collapsed",
+                key=f"regatta_select_{st.session_state.cache_version}"
+            )
+    else:
+        # Dashboard mode: just regatta dropdown
         selected_regatta_display = st.selectbox(
             "Regatta",
             options=regatta_options_list,
             index=default_index,
             label_visibility="collapsed",
-            key=f"regatta_select_{st.session_state.cache_version}"  # Reset on refresh
+            key=f"regatta_select_{st.session_state.cache_version}"
         )
-        # Store in session state for persistence across view toggles
-        st.session_state.selected_regatta_display = selected_regatta_display
-        selected_regatta = regatta_options.get(selected_regatta_display, "__all__")
 
-    # Distance selection
-    distance_options = {"1K": 1000, "2K": 2000, "5K": 5000}
-    with control_cols[1]:
-        selected_distance_display = st.selectbox(
-            "Distance",
-            options=list(distance_options.keys()),
-            label_visibility="collapsed"
-        )
-        target_distance = distance_options[selected_distance_display]
+    # Store in session state for persistence across view toggles
+    st.session_state.selected_regatta_display = selected_regatta_display
+    selected_regatta = regatta_options.get(selected_regatta_display, "__all__")
+
+    # Initialize per-regatta distance storage
+    if 'regatta_distances' not in st.session_state:
+        st.session_state.regatta_distances = {}
+
+    # Get saved distance for this regatta, default to 2000
+    saved_distance = st.session_state.regatta_distances.get(selected_regatta, 2000)
+
+    # Lineup mode: show remaining controls
+    if st.session_state.view_mode == 'lineup':
+        # Distance input (combined race/target distance)
+        with control_cols[1]:
+            race_distance = st.number_input(
+                "Distance",
+                min_value=500,
+                max_value=10000,
+                value=saved_distance,
+                step=500,
+                label_visibility="collapsed",
+                help="Race distance in meters (500-10000)",
+                key=f"distance_{selected_regatta}"
+            )
+            # Save distance for this regatta
+            st.session_state.regatta_distances[selected_regatta] = race_distance
+            target_distance = race_distance
+    else:
+        # Dashboard mode: use defaults
+        race_distance = saved_distance
+        target_distance = saved_distance
 
     # Boat class selection
     boat_options_list = ["1x", "2x", "2-", "4x", "4+", "4-", "8+"]
@@ -3799,19 +4329,52 @@ def main():
         else:
             st.session_state.boat_select_lineup_a = "(No boat assigned)"
         del st.session_state.pending_boat_a
-    with control_cols[2]:
-        # Get the index for the current boat class
-        current_boat_value = st.session_state.get('selected_boat_class', '4+')
-        boat_index = boat_options_list.index(current_boat_value) if current_boat_value in boat_options_list else 4
-        boat_class = st.selectbox(
-            "Boat",
-            options=boat_options_list,
-            index=boat_index,
-            key="boat_class_select",
-            label_visibility="collapsed"
-        )
-        # Sync back to session state
-        st.session_state.selected_boat_class = boat_class
+
+    # Lineup mode: show boat selection and action buttons
+    if st.session_state.view_mode == 'lineup':
+        with control_cols[2]:
+            # Get the index for the current boat class
+            current_boat_value = st.session_state.get('selected_boat_class', '4+')
+            boat_index = boat_options_list.index(current_boat_value) if current_boat_value in boat_options_list else 4
+            boat_class = st.selectbox(
+                "Boat",
+                options=boat_options_list,
+                index=boat_index,
+                key="boat_class_select",
+                label_visibility="collapsed"
+            )
+            # Sync back to session state
+            st.session_state.selected_boat_class = boat_class
+
+        with control_cols[3]:
+            if st.button("Analyze", type="primary", use_container_width=True):
+                st.session_state.analyze_clicked = True
+
+        with control_cols[4]:
+            if st.button("Clear All", type="secondary", use_container_width=True):
+                boat_seats = {'1x': 1, '2x': 2, '2-': 2, '4x': 4, '4+': 4, '4-': 4, '8+': 8}
+                num_seats = boat_seats.get(boat_class, 4)
+                st.session_state.lineup_a = [None] * num_seats
+                st.session_state.lineup_b = [None] * num_seats
+                st.session_state.lineup_c = [None] * num_seats
+                st.session_state.cox_a = None
+                st.session_state.cox_b = None
+                st.session_state.cox_c = None
+                st.session_state.boat_a = None
+                st.session_state.boat_b = None
+                st.session_state.boat_c = None
+                st.session_state.selected_rower = None
+                st.rerun()
+
+        with control_cols[5]:
+            if st.button("Reload", type="secondary", use_container_width=True, help=f"Reload data from Google Sheets"):
+                st.session_state.cache_version += 1
+                # Also reload event entries
+                st.session_state.event_entries = load_entries_from_gsheet()
+                st.rerun()
+    else:
+        # Dashboard mode: use defaults
+        boat_class = st.session_state.selected_boat_class
 
     # Calculate number of seats
     boat_seats = {
@@ -3828,97 +4391,266 @@ def main():
                 new_lineup[i] = current[i]
             st.session_state[lineup_key] = new_lineup
 
-    with control_cols[3]:
-        if st.button("Analyze", type="primary", use_container_width=True):
-            st.session_state.analyze_clicked = True
+    # Check if selected regatta has events (uses "|" separator for regatta+day combos)
+    has_events = selected_regatta in roster_manager.regatta_events
+    # Always show events when regatta has events
+    show_events_panel = has_events
 
-    with control_cols[4]:
-        if st.button("Clear All", type="secondary", use_container_width=True):
-            st.session_state.lineup_a = [None] * num_seats
-            st.session_state.lineup_b = [None] * num_seats
-            st.session_state.lineup_c = [None] * num_seats
-            st.session_state.cox_a = None
-            st.session_state.cox_b = None
-            st.session_state.cox_c = None
-            st.session_state.boat_a = None
-            st.session_state.boat_b = None
-            st.session_state.boat_c = None
-            st.session_state.selected_rower = None
-            st.rerun()
-
-    with control_cols[5]:
-        if st.button("Reload", type="secondary", use_container_width=True, help=f"Reload data from Google Sheets"):
-            st.session_state.cache_version += 1
-            # Also reload event entries
-            st.session_state.event_entries = load_entries_from_gsheet()
-            st.rerun()
-
-    # Calculation method, pace predictor, and erg-to-water toggles
-    calc_col1, calc_col2, calc_col3, calc_col4, calc_col5, calc_col6 = st.columns([1.2, 1.2, 1, 0.8, 0.8, 1])
-    with calc_col1:
-        calc_method = st.radio(
-            "Calculation",
-            options=["Split", "Watts"],
-            horizontal=True,
-            help="""**Split method**: Averages splits directly. More conservative, may better reflect real-world crew dynamics with varied abilities.
+    # Lineup mode: show Settings and Autofill expanders
+    if st.session_state.view_mode == 'lineup':
+        # Settings expander - Calculation, Predictor, Erg-to-Water
+        with st.expander("⚙️ Settings", expanded=False):
+            settings_col1, settings_col2, settings_col3 = st.columns([1, 1, 1])
+            with settings_col1:
+                calc_method = st.radio(
+                    "Calculation",
+                    options=["Split", "Watts"],
+                    horizontal=True,
+                    help="""**Split method**: Averages splits directly. More conservative, may better reflect real-world crew dynamics with varied abilities.
 
 **Watts method**: Averages power (watts) then converts to split. Faster prediction, assumes perfect synchronization."""
-        )
-        calc_method = calc_method.lower()
+                )
+                calc_method = calc_method.lower()
 
-    with calc_col2:
-        pace_predictor = st.radio(
-            "Predictor",
-            options=["Power", "Paul's"],
-            horizontal=True,
-            help="""**Power Law**: Fits a personalized fatigue curve to each athlete's test data. Uses formula: Watts = k × Distance^b. More accurate when athlete has multiple test distances.
+            with settings_col2:
+                pace_predictor = st.radio(
+                    "Predictor",
+                    options=["Power", "Paul's"],
+                    horizontal=True,
+                    help="""**Power Law**: Fits a personalized fatigue curve to each athlete's test data. Uses formula: Watts = k × Distance^b. More accurate when athlete has multiple test distances.
 
 **Paul's Law**: Traditional formula adding 6 seconds per 500m split for each doubling of distance. Simple and reliable with single test score."""
-        )
-        pace_predictor = "power_law" if pace_predictor == "Power" else "pauls_law"
+                )
+                pace_predictor = "power_law" if pace_predictor == "Power" else "pauls_law"
 
-    with calc_col3:
-        erg_to_water = st.toggle(
-            "Erg-to-Water",
-            value=False,
-            help="""**Erg-to-Water Adjustment**: Convert erg scores to projected on-water times using BioRow/Kleshnev boat factors.
+            with settings_col3:
+                erg_to_water = st.toggle(
+                    "Erg-to-Water",
+                    value=False,
+                    help="""**Erg-to-Water Adjustment**: Convert erg scores to projected on-water times using BioRow/Kleshnev boat factors.
 
 **Formula**: On-Water Time = Erg Time × Boat Factor × Tech Efficiency × (Race Dist / Erg Dist)
 
 **Boat Factors**: 8+ (0.93) | 4x (0.96) | 4- (1.00) | 4+/2x (1.04) | 2- (1.08) | 1x (1.16)"""
-        )
+                )
 
-    with calc_col4:
-        global_tech_efficiency = st.number_input(
-            "Tech Eff",
-            min_value=0.90,
-            max_value=1.20,
-            value=1.05,
-            step=0.01,
-            format="%.2f",
-            disabled=not erg_to_water,
-            help="Technical efficiency multiplier: 1.00 = National team | 1.05 = Excellent club | 1.10 = Intermediate club"
-        )
+        # =========================================================================
+        # AUTOFILL CONTROLS (in expander)
+        # =========================================================================
 
-    with calc_col5:
-        race_distance = st.number_input(
-            "Race Dist",
-            min_value=500,
-            max_value=10000,
-            value=target_distance,
-            step=100,
-            disabled=not erg_to_water,
-            help=f"Actual race distance in meters. Scales projection from {target_distance}m erg data."
-        )
+        # Create lineup optimizer instance
+        lineup_optimizer = LineupOptimizer(roster_manager, analyzer)
 
-    # Check if selected regatta has events (uses "|" separator for regatta+day combos)
-    has_events = selected_regatta in roster_manager.regatta_events
-    show_events_panel = False
-    with calc_col6:
-        if has_events:
-            show_events_panel = st.checkbox("Show Events", value=True)
+        # Get number of rowing seats from boat class
+        boat_seats = {'1x': 1, '2x': 2, '2-': 2, '4x': 4, '4+': 4, '4-': 4, '8+': 8}
+        num_rowing_seats = boat_seats.get(boat_class, 4)
 
-    st.divider()
+        with st.expander("⚡ Autofill Lineup", expanded=False):
+            autofill_cols = st.columns([2, 2, 2, 2, 2, 2])
+
+            with autofill_cols[0]:
+                autofill_gender = st.selectbox(
+                    "Gender",
+                    options=["Men's", "Women's", "Mixed"],
+                    index=["Men's", "Women's", "Mixed"].index(st.session_state.autofill_gender),
+                    key="autofill_gender_select"
+                )
+                st.session_state.autofill_gender = autofill_gender
+
+            with autofill_cols[1]:
+                autofill_target = st.selectbox(
+                    "Target",
+                    options=["Lineup A", "Lineup B", "Lineup C", "All (Top 3)"],
+                    index=["Lineup A", "Lineup B", "Lineup C", "All (Top 3)"].index(st.session_state.autofill_target),
+                    key="autofill_target_select"
+                )
+                st.session_state.autofill_target = autofill_target
+
+            with autofill_cols[2]:
+                autofill_use_constraints = st.checkbox(
+                    "Use Event Constraints",
+                    value=st.session_state.autofill_use_event_constraints,
+                    key="autofill_use_constraints_cb",
+                    help="When checked, applies gender/age constraints from checked events"
+                )
+                st.session_state.autofill_use_event_constraints = autofill_use_constraints
+
+            # Compute constraints from checked events
+            autofill_min_avg_age = 0
+            autofill_gender_constraint = autofill_gender
+            autofill_boat_constraint = None
+            constraint_warning = None
+
+            if autofill_use_constraints and st.session_state.autofill_checked_events:
+                checked_genders = set()
+                max_min_age = 0
+                checked_boats = set()
+
+                events = roster_manager.regatta_events.get(selected_regatta, [])
+                for event in events:
+                    if event.event_number in st.session_state.autofill_checked_events:
+                        event_gender = parse_event_gender(event.event_name)
+                        event_boat = parse_event_boat_class(event.event_name)
+                        event_category = parse_event_category(event.event_name)
+
+                        if event_gender:
+                            checked_genders.add(event_gender)
+                        if event_boat:
+                            checked_boats.add(event_boat)
+                        if event_category:
+                            min_age = get_category_min_age(event_category)
+                            max_min_age = max(max_min_age, min_age)
+
+                # Determine effective gender constraint
+                if checked_genders:
+                    if len(checked_genders) == 1:
+                        gender_code = list(checked_genders)[0]
+                        if gender_code == 'M':
+                            autofill_gender_constraint = "Men's"
+                        elif gender_code == 'W':
+                            autofill_gender_constraint = "Women's"
+                        elif gender_code == 'Mix':
+                            autofill_gender_constraint = "Mixed"
+                    else:
+                        # Multiple genders checked - require mixed
+                        autofill_gender_constraint = "Mixed"
+
+                autofill_min_avg_age = max_min_age
+                # Store in session state so it's available when button is clicked
+                st.session_state.autofill_computed_min_age = autofill_min_avg_age
+
+                # Check for conflicting boat classes
+                if len(checked_boats) > 1:
+                    constraint_warning = f"Warning: Checked events have different boat classes: {', '.join(checked_boats)}"
+                elif len(checked_boats) == 1:
+                    autofill_boat_constraint = list(checked_boats)[0]
+                    if autofill_boat_constraint != boat_class:
+                        constraint_warning = f"Warning: Event boat class ({autofill_boat_constraint}) differs from selected ({boat_class})"
+
+            # Show constraint info
+            if autofill_use_constraints:
+                with autofill_cols[3]:
+                    if st.session_state.autofill_checked_events:
+                        constraint_info = f"{autofill_gender_constraint}"
+                        if autofill_min_avg_age > 0:
+                            constraint_info += f", Age≥{autofill_min_avg_age}"
+                        st.caption(f"Constraints: {constraint_info}")
+                    else:
+                        st.caption("No events checked")
+
+            # Autofill buttons
+            with autofill_cols[4]:
+                autofill_raw_clicked = st.button("⚡ Autofill Raw", use_container_width=True,
+                                                  help="Find fastest lineup by raw erg time")
+
+            with autofill_cols[5]:
+                # Button label and behavior changes based on whether event constraints are active
+                if autofill_use_constraints and autofill_min_avg_age > 0:
+                    autofill_adj_clicked = st.button("⚡ Autofill Category", use_container_width=True,
+                                                      help=f"Find fastest lineup meeting category min age ({autofill_min_avg_age})")
+                else:
+                    autofill_adj_clicked = st.button("⚡ Autofill Adj.", use_container_width=True,
+                                                      help="Find fastest lineup by handicap-adjusted time")
+
+            # Show constraint warning
+            if constraint_warning:
+                st.warning(constraint_warning)
+
+        # Handle autofill button clicks
+        if autofill_raw_clicked or autofill_adj_clicked:
+            # Get min_avg_age from session state (more reliable than local variable)
+            effective_min_avg_age = st.session_state.get('autofill_computed_min_age', autofill_min_avg_age)
+
+            # Determine optimization mode
+            if autofill_raw_clicked:
+                optimize_for = 'raw'
+            elif autofill_use_constraints and effective_min_avg_age > 0:
+                # With event constraints, optimize for fastest raw time that meets category
+                optimize_for = 'category'
+            else:
+                optimize_for = 'adjusted'
+
+            num_lineups = 3 if autofill_target == "All (Top 3)" else 1
+
+            # Get effective constraints
+            effective_gender = autofill_gender_constraint if autofill_use_constraints else autofill_gender
+
+            # Find optimal lineups
+            optimal_lineups = lineup_optimizer.find_optimal_lineups(
+                regatta=selected_regatta,
+                num_seats=num_rowing_seats,
+                boat_class=boat_class,
+                target_distance=target_distance,
+                calc_method=calc_method,
+                predictor=pace_predictor,
+                optimize_for=optimize_for,
+                gender=effective_gender,
+                min_avg_age=effective_min_avg_age,
+                num_results=num_lineups
+            )
+
+            if not optimal_lineups:
+                # Count eligible rowers for better error message
+                gender_filter = None
+                if effective_gender == "Men's":
+                    gender_filter = 'M'
+                elif effective_gender == "Women's":
+                    gender_filter = 'W'
+                eligible = lineup_optimizer.get_eligible_rowers(selected_regatta, gender_filter, 0)
+
+                if len(eligible) < num_rowing_seats:
+                    st.warning(f"Could not find valid lineup. Only {len(eligible)} eligible rowers with erg scores (need {num_rowing_seats}).")
+                elif optimize_for == 'category' and effective_min_avg_age > 0:
+                    # Calculate max possible avg age from eligible rowers
+                    ages = sorted([r.age for r in eligible], reverse=True)
+                    max_avg_age = sum(ages[:num_rowing_seats]) / num_rowing_seats if ages else 0
+                    st.warning(f"Could not find lineup meeting category min age ({effective_min_avg_age}). "
+                              f"Max possible avg age from eligible rowers: {max_avg_age:.1f}")
+                else:
+                    st.warning(f"Could not find valid lineup from {len(eligible)} eligible rowers.")
+            else:
+                # Assign lineups to slots
+                lineup_slots = []
+                if autofill_target == "Lineup A":
+                    lineup_slots = ['a']
+                elif autofill_target == "Lineup B":
+                    lineup_slots = ['b']
+                elif autofill_target == "Lineup C":
+                    lineup_slots = ['c']
+                else:  # All (Top 3)
+                    lineup_slots = ['a', 'b', 'c']
+
+                for i, slot in enumerate(lineup_slots):
+                    if i < len(optimal_lineups):
+                        lineup_data = optimal_lineups[i]
+                        rower_names = lineup_data['rowers']
+
+                        # Resize lineup if needed
+                        while len(rower_names) < num_rowing_seats:
+                            rower_names.append(None)
+
+                        setattr_name = f'lineup_{slot}'
+                        st.session_state[setattr_name] = rower_names[:num_rowing_seats]
+
+                        # Format time for toast
+                        if optimize_for == 'adjusted':
+                            time_val = lineup_data['adjusted_time']
+                            time_label = "adj"
+                        else:
+                            time_val = lineup_data['raw_time']
+                            time_label = "raw"
+                        time_str = format_time(time_val)
+                        age_str = f"Avg age: {lineup_data['avg_age']:.1f}"
+                        st.toast(f"Lineup {slot.upper()}: {time_str} {time_label} ({age_str})")
+
+                st.rerun()
+
+        st.divider()
+    else:
+        # Dashboard mode: set default values for variables used later
+        calc_method = "split"
+        pace_predictor = "power_law"
+        erg_to_water = False
 
     # =========================================================================
     # SIDEBAR: Roster with Sort, Search, Women/Men
@@ -4360,15 +5092,12 @@ def main():
         with col:
             lineup = st.session_state[key]
 
-            # Per-lineup tech efficiency override (only shown when erg-to-water is enabled)
+            # Per-lineup tech efficiency (only shown when erg-to-water is enabled)
             if erg_to_water:
                 tech_key = f"tech_efficiency_{key}"
-                # Initialize or sync with global value when global changes
+                # Initialize with default value
                 if tech_key not in st.session_state:
-                    st.session_state[tech_key] = global_tech_efficiency
-                elif st.session_state.get('_last_global_tech_eff') is not None and st.session_state.get('_last_global_tech_eff') != global_tech_efficiency:
-                    # Global changed, update lineup values to match
-                    st.session_state[tech_key] = global_tech_efficiency
+                    st.session_state[tech_key] = 1.05
                 lineup_tech = st.number_input(
                     f"{title} Tech Eff",
                     min_value=0.90,
@@ -4376,12 +5105,12 @@ def main():
                     step=0.01,
                     format="%.2f",
                     key=tech_key,
-                    help=f"Override for {title}. 1.00 = National team | 1.05 = Excellent club | 1.10 = Intermediate club"
+                    help=f"Tech efficiency for {title}. 1.00 = National team | 1.05 = Excellent club | 1.10 = Intermediate club"
                 )
                 # Store the actual widget value for use in analysis
                 lineup_tech_efficiencies[key] = lineup_tech
             else:
-                lineup_tech_efficiencies[key] = global_tech_efficiency
+                lineup_tech_efficiencies[key] = 1.05
 
             stats = get_lineup_stats(lineup, roster_manager)
             if stats:
@@ -4627,10 +5356,20 @@ def main():
                         if is_lineup_eligible_for_event(lineup_gender, avg_age, boat_class, event):
                             eligible_events.append(event)
 
-                    # Show buttons for eligible events (respect targeted filter from event panel)
-                    # Note: show_targeted_only is defined in event panel, use same key
+                    # Show buttons for eligible events
+                    # Prioritize: 1) Events checked for autofill, 2) Targeted events, 3) Other eligible
                     targeted_filter = st.session_state.get("targeted_events_filter", True)
-                    events_to_show = [e for e in eligible_events if e.include] if targeted_filter else eligible_events
+                    autofill_checked = st.session_state.get('autofill_checked_events', set())
+
+                    # Always include events checked for autofill (user explicitly selected them)
+                    checked_events = [e for e in eligible_events if e.event_number in autofill_checked]
+                    if targeted_filter:
+                        other_events = [e for e in eligible_events if e.include and e.event_number not in autofill_checked]
+                    else:
+                        other_events = [e for e in eligible_events if e.event_number not in autofill_checked]
+
+                    # Checked events first, then others
+                    events_to_show = checked_events + other_events
 
                     if events_to_show:
                         st.markdown("**Enter into:**")
@@ -4738,13 +5477,16 @@ def main():
                 boat = entry.get('boat', '')
                 return not boat or boat.strip() == ''
 
-            # Display event list with entry indicators
+            # Display event list with entry indicators and autofill checkboxes
             for event in events:
                 priority_marker = "⭐ " if event.priority else ""
 
                 # Check for entries in this event
                 event_entries = [e for e in st.session_state.event_entries
                                 if entry_matches_event(e, event)]
+
+                # Build event label
+                event_time_str = format_event_time(event.event_time)
 
                 if event_entries:
                     # Show event with entry count as expander
@@ -4754,80 +5496,110 @@ def main():
                     any_missing_boat = any(is_missing_boat(e) for e in event_entries)
                     cox_warning = "📣 " if any_missing_cox else ""
                     boat_warning = "🚣 " if any_missing_boat else ""
-                    with st.expander(f"{format_event_time(event.event_time)} {priority_marker}{cox_warning}{boat_warning}{event.event_name} [{entry_count}]"):
-                        for entry_idx, entry in enumerate(event_entries):
-                            avg_age_display = entry.get('avg_age', '?')
-                            # Show warnings if this entry is missing cox or boat
-                            entry_warnings = []
-                            if is_missing_cox(entry):
-                                entry_warnings.append("📣 Needs Cox")
-                            if is_missing_boat(entry):
-                                entry_warnings.append("🚣 Needs Boat")
-                            warning_str = " ".join(entry_warnings)
-                            boat_display = f" | Boat: {entry.get('boat')}" if entry.get('boat') else ""
-                            st.markdown(f"**Entry {entry['entry_number']}** - {entry['boat_class']} {entry['category']} (Avg: {avg_age_display}){boat_display} {warning_str}")
-                            # Show rowers
-                            rower_list = ", ".join(entry['rowers'])
-                            st.caption(rower_list)
-                            # Edit and Remove buttons
-                            btn_cols = st.columns(2)
-                            with btn_cols[0]:
-                                if st.button("✏️", key=f"edit_{event.event_number}_{entry['entry_number']}_{entry_idx}", help="Edit in Lineup A"):
-                                    # Load entry into Lineup A for editing
-                                    entry_boat = entry.get('boat_class', '4+')
-                                    entry_rowers = entry.get('rowers', [])
-                                    is_coxed = '+' in entry_boat
 
-                                    # Use pending flag for boat class (will be processed before widget renders on rerun)
-                                    st.session_state.pending_boat_class = entry_boat
+                    # Checkbox for autofill (inline before expander)
+                    is_checked = event.event_number in st.session_state.autofill_checked_events
+                    chk_col, exp_col = st.columns([0.15, 9.85], gap="small")
+                    with chk_col:
+                        event_check = st.checkbox("", value=is_checked,
+                                                   key=f"autofill_event_check_{event.event_number}")
+                    with exp_col:
+                        with st.expander(f"{event_time_str} {priority_marker}{cox_warning}{boat_warning}{event.event_name} [{entry_count}]"):
+                            for entry_idx, entry in enumerate(event_entries):
+                                avg_age_display = entry.get('avg_age', '-')
+                                # Show warnings if this entry is missing cox or boat
+                                entry_warnings = []
+                                if is_missing_cox(entry):
+                                    entry_warnings.append("📣 Needs Cox")
+                                if is_missing_boat(entry):
+                                    entry_warnings.append("🚣 Needs Boat")
+                                warning_str = " ".join(entry_warnings)
+                                boat_display = f" | Boat: {entry.get('boat')}" if entry.get('boat') else ""
+                                st.markdown(f"**Entry {entry['entry_number']}** - {entry['boat_class']} {entry['category']} (Avg: {avg_age_display}){boat_display} {warning_str}")
+                                # Show rowers
+                                rower_list = ", ".join(entry['rowers'])
+                                st.caption(rower_list)
+                                # Edit and Remove buttons
+                                btn_cols = st.columns(2)
+                                with btn_cols[0]:
+                                    if st.button("✏️", key=f"edit_{event.event_number}_{entry['entry_number']}_{entry_idx}", help="Edit in Lineup A"):
+                                        # Load entry into Lineup A for editing
+                                        entry_boat = entry.get('boat_class', '4+')
+                                        entry_rowers = entry.get('rowers', [])
+                                        is_coxed = '+' in entry_boat
 
-                                    # For coxed boats, last rower is cox
-                                    boat_seats = {'1x': 1, '2x': 2, '2-': 2, '4x': 4, '4+': 4, '4-': 4, '8+': 8}
-                                    expected_seats = boat_seats.get(entry_boat, 4)
+                                        # Use pending flag for boat class (will be processed before widget renders on rerun)
+                                        st.session_state.pending_boat_class = entry_boat
 
-                                    if is_coxed and entry_rowers:
-                                        if len(entry_rowers) > expected_seats:
-                                            # Has cox - split rowers and cox
-                                            seat_rowers = entry_rowers[:expected_seats]
-                                            cox = entry_rowers[expected_seats]
+                                        # For coxed boats, last rower is cox
+                                        boat_seats = {'1x': 1, '2x': 2, '2-': 2, '4x': 4, '4+': 4, '4-': 4, '8+': 8}
+                                        expected_seats = boat_seats.get(entry_boat, 4)
+
+                                        if is_coxed and entry_rowers:
+                                            if len(entry_rowers) > expected_seats:
+                                                # Has cox - split rowers and cox
+                                                seat_rowers = entry_rowers[:expected_seats]
+                                                cox = entry_rowers[expected_seats]
+                                            else:
+                                                # No cox assigned
+                                                seat_rowers = entry_rowers
+                                                cox = None
+                                            st.session_state.lineup_a = seat_rowers + [None] * (expected_seats - len(seat_rowers))
+                                            st.session_state.cox_a = cox
                                         else:
-                                            # No cox assigned
-                                            seat_rowers = entry_rowers
-                                            cox = None
-                                        st.session_state.lineup_a = seat_rowers + [None] * (expected_seats - len(seat_rowers))
-                                        st.session_state.cox_a = cox
-                                    else:
-                                        # Non-coxed boat
-                                        st.session_state.lineup_a = entry_rowers + [None] * (expected_seats - len(entry_rowers))
-                                        st.session_state.cox_a = None
+                                            # Non-coxed boat
+                                            st.session_state.lineup_a = entry_rowers + [None] * (expected_seats - len(entry_rowers))
+                                            st.session_state.cox_a = None
 
-                                    # Restore club boat assignment (use pending flag for widget sync)
-                                    st.session_state.pending_boat_a = entry.get('boat', None)
+                                        # Restore club boat assignment (use pending flag for widget sync)
+                                        st.session_state.pending_boat_a = entry.get('boat', None)
 
-                                    # Store original entry for edit mode
-                                    st.session_state.editing_entry = entry.copy()
-                                    st.session_state.editing_event = event
+                                        # Store original entry for edit mode
+                                        st.session_state.editing_entry = entry.copy()
+                                        st.session_state.editing_event = event
 
-                                    # Switch to lineup view
-                                    st.session_state.view_mode = 'lineup'
-                                    st.toast(f"Editing Entry {entry['entry_number']} for {event.event_name}")
-                                    st.rerun()
-                            with btn_cols[1]:
-                                if st.button("🗑️", key=f"remove_{event.event_number}_{entry['entry_number']}_{entry_idx}", help="Remove entry"):
-                                    # Delete from Google Sheets
-                                    if delete_entry_from_gsheet(entry):
-                                        st.toast("Entry removed from Google Sheets")
-                                    st.session_state.event_entries.remove(entry)
-                                    # Clear edit mode if we just deleted the entry being edited
-                                    editing = st.session_state.get('editing_entry')
-                                    if editing and editing.get('entry_number') == entry.get('entry_number') and editing.get('event_number') == entry.get('event_number'):
-                                        del st.session_state['editing_entry']
-                                        if 'editing_event' in st.session_state:
-                                            del st.session_state['editing_event']
-                                    st.rerun()
+                                        # Switch to lineup view
+                                        st.session_state.view_mode = 'lineup'
+                                        st.toast(f"Editing Entry {entry['entry_number']} for {event.event_name}")
+                                        st.rerun()
+                                with btn_cols[1]:
+                                    if st.button("🗑️", key=f"remove_{event.event_number}_{entry['entry_number']}_{entry_idx}", help="Remove entry"):
+                                        # Delete from Google Sheets
+                                        if delete_entry_from_gsheet(entry):
+                                            st.toast("Entry removed from Google Sheets")
+                                        st.session_state.event_entries.remove(entry)
+                                        # Clear edit mode if we just deleted the entry being edited
+                                        editing = st.session_state.get('editing_entry')
+                                        if editing and editing.get('entry_number') == entry.get('entry_number') and editing.get('event_number') == entry.get('event_number'):
+                                            del st.session_state['editing_entry']
+                                            if 'editing_event' in st.session_state:
+                                                del st.session_state['editing_event']
+                                        st.rerun()
+
+                    # Handle checkbox state change (for events with entries)
+                    if event_check and event.event_number not in st.session_state.autofill_checked_events:
+                        st.session_state.autofill_checked_events.add(event.event_number)
+                        st.rerun()
+                    elif not event_check and event.event_number in st.session_state.autofill_checked_events:
+                        st.session_state.autofill_checked_events.discard(event.event_number)
+                        st.rerun()
+
                 else:
-                    # No entries - just show event name
-                    st.text(f"{format_event_time(event.event_time)} {priority_marker}{event.event_name}")
+                    # No entries - show checkbox with event name inline
+                    is_checked = event.event_number in st.session_state.autofill_checked_events
+                    event_label = f"{event_time_str} {priority_marker}{event.event_name}"
+                    event_check = st.checkbox(
+                        event_label,
+                        value=is_checked,
+                        key=f"autofill_event_check_{event.event_number}",
+                    )
+                    # Handle checkbox state change
+                    if event_check and event.event_number not in st.session_state.autofill_checked_events:
+                        st.session_state.autofill_checked_events.add(event.event_number)
+                        st.rerun()
+                    elif not event_check and event.event_number in st.session_state.autofill_checked_events:
+                        st.session_state.autofill_checked_events.discard(event.event_number)
+                        st.rerun()
 
             # Export button at bottom of event panel
             if st.session_state.event_entries:
@@ -4859,9 +5631,6 @@ def main():
                     mime="text/csv",
                     use_container_width=True
                 )
-
-    # Save global tech efficiency for next run comparison
-    st.session_state['_last_global_tech_eff'] = global_tech_efficiency
 
     # Analysis Results
     st.divider()
@@ -4922,7 +5691,7 @@ def main():
                     # Store lineup gender for erg-to-water conversion
                     result['lineup_gender'] = get_lineup_gender(rower_names_in_lineup)
                     # Store per-lineup tech efficiency (from widget value captured earlier)
-                    result['tech_efficiency'] = lineup_tech_efficiencies.get(key, global_tech_efficiency)
+                    result['tech_efficiency'] = lineup_tech_efficiencies.get(key, 1.05)
                     results.append(result)
 
         if results:
@@ -4962,7 +5731,7 @@ def main():
                     split_500m = result['boat_split_500m']
 
                     if erg_to_water:
-                        tech_eff = result.get('tech_efficiency', global_tech_efficiency)
+                        tech_eff = result.get('tech_efficiency', 1.05)
                         dist_ratio = race_distance / target_distance
 
                         # Apply erg-to-water conversion with distance ratio
@@ -4994,8 +5763,9 @@ def main():
             # Show indicator when erg-to-water conversion is active
             if erg_to_water:
                 # Check if lineups have different tech efficiencies
-                lineup_tech_effs = set(r.get('tech_efficiency', global_tech_efficiency) for r in results)
-                tech_eff_str = f"{global_tech_efficiency:.2f}" if len(lineup_tech_effs) <= 1 else "varies"
+                lineup_tech_effs = set(r.get('tech_efficiency', 1.05) for r in results)
+                tech_eff_value = list(lineup_tech_effs)[0] if len(lineup_tech_effs) == 1 else 1.05
+                tech_eff_str = f"{tech_eff_value:.2f}" if len(lineup_tech_effs) <= 1 else "varies"
                 boat_factor = get_boat_factor(boat_class)
                 caption = f"*On-Water Projection Mode* | {boat_class} Factor: {boat_factor:.2f} | Tech Eff: {tech_eff_str}"
                 if race_distance != target_distance:
@@ -5011,7 +5781,7 @@ def main():
                         st.markdown(f"**Lineup {result.get('lineup_display', result['lineup_id'])}**")
                         proj_data = []
 
-                        proj_tech_eff = result.get('tech_efficiency', global_tech_efficiency)
+                        proj_tech_eff = result.get('tech_efficiency', 1.05)
 
                         for proj in result['projections']:
                             if 'error' not in proj:
@@ -5094,7 +5864,7 @@ def main():
                             lineup_display = result.get('lineup_display', lineup_id)
                             avg_age = result.get('avg_age', 0)
 
-                            export_tech_eff = result.get('tech_efficiency', global_tech_efficiency)
+                            export_tech_eff = result.get('tech_efficiency', 1.05)
 
                             proj_rows = []
                             for proj in result['projections']:
@@ -5171,7 +5941,7 @@ def main():
                     if 'projections' in result:
                         avg_age = result.get('avg_age', 0)
                         masters_cat = get_masters_category(avg_age)
-                        clip_tech_eff = result.get('tech_efficiency', global_tech_efficiency)
+                        clip_tech_eff = result.get('tech_efficiency', 1.05)
 
                         lineup_display = result.get('lineup_display', result['lineup_id'])
                         header_info = f"{lineup_display} Details (Avg Age: {avg_age:.1f} | Cat: {masters_cat})"
