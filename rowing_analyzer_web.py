@@ -15,7 +15,7 @@ import html
 import json
 import base64
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Set
 from pathlib import Path
 import re
 
@@ -1821,13 +1821,14 @@ class LineupOptimizer:
         self.analyzer = analyzer
 
     def get_eligible_rowers(self, regatta: str, gender: Optional[str] = None,
-                            min_age: int = 0) -> List[Rower]:
+                            min_age: int = 0, excluded_names: Optional[Set[str]] = None) -> List[Rower]:
         """Get rowers eligible based on regatta attendance, gender, and age constraints.
 
         Args:
             regatta: Regatta key (or "__all__" for all rowers)
             gender: 'M', 'W', or None for no filter
             min_age: Minimum individual age (not average), default 0
+            excluded_names: Set of rower names to exclude from results
 
         Returns:
             List of eligible Rower objects with erg scores
@@ -1866,6 +1867,9 @@ class LineupOptimizer:
                 continue
             # Age filter (individual must meet minimum)
             if rower.age < min_age:
+                continue
+            # Exclusion filter
+            if excluded_names and name in excluded_names:
                 continue
             eligible.append(rower)
 
@@ -1990,11 +1994,86 @@ class LineupOptimizer:
             return None
         return result
 
+    def _optimize_seat_assignment_with_locks(self, rowers: List[Rower], boat_class: str,
+                                             locked_rowers: Dict[int, str]) -> Optional[List[Rower]]:
+        """Find valid seat assignment for sweep boats while preserving locked positions.
+
+        Locked rowers stay in their assigned seats, and unlocked rowers are assigned
+        to remaining seats based on their side preferences.
+
+        Returns None if no valid assignment exists.
+        """
+        is_sculling = 'x' in boat_class.lower()
+        if is_sculling:
+            return rowers  # No seat optimization needed for sculling
+
+        num_seats = len(rowers)
+        locked_positions = set(locked_rowers.keys())
+
+        # Identify which rowers are locked (by name) and which are unlocked
+        locked_names = set(locked_rowers.values())
+        locked_rower_list = [r for r in rowers if r.name in locked_names]
+        unlocked_rower_list = [r for r in rowers if r.name not in locked_names]
+
+        # Verify locked rowers can row their locked seats
+        for seat_idx, name in locked_rowers.items():
+            rower = next((r for r in rowers if r.name == name), None)
+            if rower and not self._can_row_seat(rower, seat_idx, boat_class):
+                return None  # Locked rower can't row their locked seat
+
+        # Determine which unlocked seats need port vs starboard rowers
+        unlocked_port_seats = [i for i in range(num_seats) if i not in locked_positions and i % 2 == 1]
+        unlocked_starboard_seats = [i for i in range(num_seats) if i not in locked_positions and i % 2 == 0]
+
+        # Separate unlocked rowers by side preference
+        port_only = [r for r in unlocked_rower_list if r.side_port and not r.side_starboard]
+        starboard_only = [r for r in unlocked_rower_list if r.side_starboard and not r.side_port]
+        both = [r for r in unlocked_rower_list if r.side_port and r.side_starboard]
+
+        # Check if we have too many single-side rowers
+        if len(port_only) > len(unlocked_port_seats) or len(starboard_only) > len(unlocked_starboard_seats):
+            return None
+
+        # Assign single-side rowers first
+        port_assignments = port_only.copy()
+        starboard_assignments = starboard_only.copy()
+
+        # Fill remaining with "both" rowers
+        remaining = both.copy()
+        while len(port_assignments) < len(unlocked_port_seats) and remaining:
+            port_assignments.append(remaining.pop(0))
+        while len(starboard_assignments) < len(unlocked_starboard_seats) and remaining:
+            starboard_assignments.append(remaining.pop(0))
+
+        if len(port_assignments) != len(unlocked_port_seats) or len(starboard_assignments) != len(unlocked_starboard_seats):
+            return None
+
+        # Build the final result with locked rowers in place
+        result = [None] * num_seats
+
+        # Place locked rowers
+        for seat_idx, name in locked_rowers.items():
+            rower = next((r for r in rowers if r.name == name), None)
+            result[seat_idx] = rower
+
+        # Place unlocked rowers
+        for seat_idx in unlocked_starboard_seats:
+            if starboard_assignments:
+                result[seat_idx] = starboard_assignments.pop(0)
+        for seat_idx in unlocked_port_seats:
+            if port_assignments:
+                result[seat_idx] = port_assignments.pop(0)
+
+        if None in result:
+            return None
+        return result
+
     def find_optimal_lineups(self, regatta: str, num_seats: int, boat_class: str,
                              target_distance: int, calc_method: str = 'watts',
                              predictor: str = 'power_law', optimize_for: str = 'raw',
                              gender: str = "Men's", min_avg_age: int = 0,
-                             num_results: int = 3) -> List[Dict]:
+                             num_results: int = 3, excluded_rowers: Optional[Set[str]] = None,
+                             locked_rowers: Optional[Dict[int, str]] = None) -> List[Dict]:
         """Find optimal lineup combinations.
 
         Args:
@@ -2008,12 +2087,41 @@ class LineupOptimizer:
             gender: "Men's", "Women's", or "Mixed"
             min_avg_age: Minimum average age for the lineup
             num_results: Number of top lineups to return
+            excluded_rowers: Set of rower names to exclude from consideration
+            locked_rowers: Dict mapping seat index to rower name (seats to preserve)
 
         Returns:
             List of dicts with 'rowers', 'raw_time', 'adjusted_time', 'avg_age'
         """
         from itertools import combinations
         import math as math_module
+
+        # Handle locked rowers: exclude them from available pool, adjust seats needed
+        locked_rowers = locked_rowers or {}
+        locked_names = set(locked_rowers.values())
+        unlocked_seats = num_seats - len(locked_rowers)
+
+        # If all seats are locked, just evaluate the locked lineup
+        if unlocked_seats == 0:
+            locked_rower_names = [locked_rowers.get(i) for i in range(num_seats)]
+            if None in locked_rower_names:
+                return []  # Invalid locked configuration
+            # Build analysis for locked lineup
+            rowers = [self.roster.get_rower(name) for name in locked_rower_names]
+            if None in rowers:
+                return []
+            analysis = self.analyzer.analyze_lineup(
+                locked_rower_names, target_distance, boat_class, calc_method, predictor
+            )
+            if not analysis or analysis['raw_time'] is None:
+                return []
+            avg_age = statistics.mean([r.age for r in rowers])
+            return [{
+                'rowers': locked_rower_names,
+                'raw_time': analysis['raw_time'],
+                'adjusted_time': analysis['adjusted_time'],
+                'avg_age': avg_age
+            }]
 
         # Map UI gender to filter gender
         gender_filter = None
@@ -2023,10 +2131,13 @@ class LineupOptimizer:
             gender_filter = 'W'
         # Mixed = None (no filter, but we'll verify mix in lineup)
 
-        # Get eligible rowers
-        eligible = self.get_eligible_rowers(regatta, gender_filter, min_age=0)
+        # Combine exclusions: user-excluded rowers + locked rowers (already assigned)
+        all_excluded = set(excluded_rowers or set()) | locked_names
 
-        if len(eligible) < num_seats:
+        # Get eligible rowers
+        eligible = self.get_eligible_rowers(regatta, gender_filter, min_age=0, excluded_names=all_excluded)
+
+        if len(eligible) < unlocked_seats:
             return []
 
         # Pre-compute projected watts for all eligible rowers
@@ -2039,12 +2150,12 @@ class LineupOptimizer:
         # Filter to only rowers with valid projections
         eligible = [r for r in eligible if r.name in rower_watts]
 
-        if len(eligible) < num_seats:
+        if len(eligible) < unlocked_seats:
             return []
 
-        # Calculate number of combinations
+        # Calculate number of combinations (only for unlocked seats)
         n = len(eligible)
-        k = num_seats
+        k = unlocked_seats
         num_combinations = math_module.comb(n, k)
 
         results = []
@@ -2088,13 +2199,19 @@ class LineupOptimizer:
         # Debug counters
         debug_counts = {'age_rejected': 0, 'gender_rejected': 0, 'seat_rejected': 0, 'total_tried': 0}
 
+        # Calculate gender needs for Mixed lineups with locked rowers
+        locked_men = sum(1 for name in locked_names if self.roster.get_rower(name) and self.roster.get_rower(name).gender == 'M')
+        locked_women = sum(1 for name in locked_names if self.roster.get_rower(name) and self.roster.get_rower(name).gender == 'F')
+        need_men = (num_seats // 2) - locked_men if gender == "Mixed" else None
+        need_women = (num_seats // 2) - locked_women if gender == "Mixed" else None
+
         if num_combinations <= self.MAX_EXHAUSTIVE_COMBINATIONS:
             # Exhaustive search - evaluate ALL combinations
-            for combo in combinations(eligible, num_seats):
+            for combo in combinations(eligible, unlocked_seats):
                 debug_counts['total_tried'] += 1
                 result = self._evaluate_lineup(
                     list(combo), boat_class, target_distance, calc_method, predictor,
-                    gender, min_avg_age, rower_watts, debug_counts
+                    gender, min_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
                 )
                 if result:
                     results.append(result)
@@ -2107,61 +2224,115 @@ class LineupOptimizer:
                 # Sort by age descending (older = more handicap benefit)
                 age_sorted = sorted(eligible, key=lambda r: r.age, reverse=True)
                 # Try top N oldest rowers as a baseline
-                if len(age_sorted) >= num_seats:
-                    oldest_combo = age_sorted[:num_seats]
-                    combo_key = tuple(sorted(r.name for r in oldest_combo))
-                    seen_combos.add(combo_key)
-                    debug_counts['total_tried'] += 1
-                    result = self._evaluate_lineup(
-                        oldest_combo, boat_class, target_distance, calc_method, predictor,
-                        gender, min_avg_age, rower_watts, debug_counts
-                    )
-                    if result:
-                        results.append(result)
+                if len(age_sorted) >= unlocked_seats:
+                    if gender == "Mixed" and need_men is not None and need_women is not None:
+                        # For Mixed with locks, get oldest from each gender based on what's still needed
+                        males_by_age = sorted([r for r in eligible if r.gender == 'M'], key=lambda r: r.age, reverse=True)
+                        females_by_age = sorted([r for r in eligible if r.gender == 'F'], key=lambda r: r.age, reverse=True)
+                        if len(males_by_age) >= need_men and len(females_by_age) >= need_women:
+                            oldest_combo = males_by_age[:need_men] + females_by_age[:need_women]
+                        else:
+                            oldest_combo = []
+                    else:
+                        oldest_combo = age_sorted[:unlocked_seats]
+
+                    if len(oldest_combo) == unlocked_seats:
+                        combo_key = tuple(sorted(r.name for r in oldest_combo))
+                        seen_combos.add(combo_key)
+                        debug_counts['total_tried'] += 1
+                        result = self._evaluate_lineup(
+                            oldest_combo, boat_class, target_distance, calc_method, predictor,
+                            gender, min_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
+                        )
+                        if result:
+                            results.append(result)
 
             # Sort by appropriate score (raw watts or adjusted score)
             sort_score = rower_adjusted_score if optimize_for == 'adjusted' else rower_watts
             sorted_rowers = sorted(eligible, key=lambda r: sort_score.get(r.name, 0), reverse=True)
 
+            # For Mixed gender, separate by gender for 50/50 split combo building
+            if gender == "Mixed" and need_men is not None and need_women is not None:
+                males_sorted = [r for r in sorted_rowers if r.gender == 'M']
+                females_sorted = [r for r in sorted_rowers if r.gender == 'F']
+                # Need enough of each gender to fill unlocked seats
+                if len(males_sorted) < need_men or len(females_sorted) < need_women:
+                    return []  # Can't form a 50/50 mixed lineup
+
             # Also try the top-scored rowers as another baseline
-            if len(sorted_rowers) >= num_seats:
-                top_combo = sorted_rowers[:num_seats]
-                combo_key = tuple(sorted(r.name for r in top_combo))
-                if combo_key not in seen_combos:
-                    seen_combos.add(combo_key)
-                    debug_counts['total_tried'] += 1
-                    result = self._evaluate_lineup(
-                        top_combo, boat_class, target_distance, calc_method, predictor,
-                        gender, min_avg_age, rower_watts, debug_counts
-                    )
-                    if result:
-                        results.append(result)
+            if len(sorted_rowers) >= unlocked_seats:
+                if gender == "Mixed" and need_men is not None and need_women is not None:
+                    # For Mixed, build gender split based on what's still needed
+                    top_combo = males_sorted[:need_men] + females_sorted[:need_women]
+                else:
+                    top_combo = sorted_rowers[:unlocked_seats]
+
+                if len(top_combo) == unlocked_seats:
+                    combo_key = tuple(sorted(r.name for r in top_combo))
+                    if combo_key not in seen_combos:
+                        seen_combos.add(combo_key)
+                        debug_counts['total_tried'] += 1
+                        result = self._evaluate_lineup(
+                            top_combo, boat_class, target_distance, calc_method, predictor,
+                            gender, min_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
+                        )
+                        if result:
+                            results.append(result)
 
             # For category optimization, try strategic age-balanced combinations
             if optimize_for == 'category' and min_avg_age > 0:
-                # Sort by age and watts separately
-                by_age = sorted(eligible, key=lambda r: r.age, reverse=True)
-                by_watts = sorted(eligible, key=lambda r: rower_watts.get(r.name, 0), reverse=True)
+                if gender == "Mixed" and need_men is not None and need_women is not None:
+                    # For Mixed category, do age/speed balancing within each gender
+                    males_by_age = sorted(males_sorted, key=lambda r: r.age, reverse=True)
+                    females_by_age = sorted(females_sorted, key=lambda r: r.age, reverse=True)
 
-                # Try mixing: N fastest + (seats-N) oldest, for various N
-                for num_fast in range(num_seats + 1):
-                    num_old = num_seats - num_fast
-                    fast_rowers = by_watts[:num_fast]
-                    # Get oldest rowers not already in fast list
-                    old_rowers = [r for r in by_age if r not in fast_rowers][:num_old]
+                    # Try mixing: N fastest + (need-N) oldest, for each gender
+                    for num_fast_m in range(need_men + 1):
+                        num_old_m = need_men - num_fast_m
+                        fast_males = males_sorted[:num_fast_m]
+                        old_males = [r for r in males_by_age if r not in fast_males][:num_old_m]
 
-                    if len(fast_rowers) + len(old_rowers) == num_seats:
-                        combo = fast_rowers + old_rowers
-                        combo_key = tuple(sorted(r.name for r in combo))
-                        if combo_key not in seen_combos:
-                            seen_combos.add(combo_key)
-                            debug_counts['total_tried'] += 1
-                            result = self._evaluate_lineup(
-                                combo, boat_class, target_distance, calc_method, predictor,
-                                gender, min_avg_age, rower_watts, debug_counts
-                            )
-                            if result:
-                                results.append(result)
+                        for num_fast_f in range(need_women + 1):
+                            num_old_f = need_women - num_fast_f
+                            fast_females = females_sorted[:num_fast_f]
+                            old_females = [r for r in females_by_age if r not in fast_females][:num_old_f]
+
+                            combo = fast_males + old_males + fast_females + old_females
+                            if len(combo) == unlocked_seats:
+                                combo_key = tuple(sorted(r.name for r in combo))
+                                if combo_key not in seen_combos:
+                                    seen_combos.add(combo_key)
+                                    debug_counts['total_tried'] += 1
+                                    result = self._evaluate_lineup(
+                                        combo, boat_class, target_distance, calc_method, predictor,
+                                        gender, min_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
+                                    )
+                                    if result:
+                                        results.append(result)
+                else:
+                    # Sort by age and watts separately
+                    by_age = sorted(eligible, key=lambda r: r.age, reverse=True)
+                    by_watts = sorted(eligible, key=lambda r: rower_watts.get(r.name, 0), reverse=True)
+
+                    # Try mixing: N fastest + (seats-N) oldest, for various N
+                    for num_fast in range(unlocked_seats + 1):
+                        num_old = unlocked_seats - num_fast
+                        fast_rowers = by_watts[:num_fast]
+                        # Get oldest rowers not already in fast list
+                        old_rowers = [r for r in by_age if r not in fast_rowers][:num_old]
+
+                        if len(fast_rowers) + len(old_rowers) == unlocked_seats:
+                            combo = fast_rowers + old_rowers
+                            combo_key = tuple(sorted(r.name for r in combo))
+                            if combo_key not in seen_combos:
+                                seen_combos.add(combo_key)
+                                debug_counts['total_tried'] += 1
+                                result = self._evaluate_lineup(
+                                    combo, boat_class, target_distance, calc_method, predictor,
+                                    gender, min_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
+                                )
+                                if result:
+                                    results.append(result)
 
             # Generate diverse lineups by varying top selections
             attempts = 0
@@ -2172,28 +2343,55 @@ class LineupOptimizer:
             while len(results) < min_candidates and attempts < max_attempts:
                 # Greedy selection with some randomization
                 import random
-                pool = sorted_rowers.copy()
                 selected = []
 
-                for _ in range(num_seats):
-                    if not pool:
-                        break
-                    # Take from top candidates with weighted random (more diversity for adjusted)
-                    top_n = 5 if optimize_for == 'adjusted' else 3
-                    candidates = pool[:min(top_n, len(pool))]
-                    weights = list(range(top_n, 0, -1))[:len(candidates)]
-                    chosen = random.choices(candidates, weights=weights)[0]
-                    selected.append(chosen)
-                    pool.remove(chosen)
+                if gender == "Mixed" and need_men is not None and need_women is not None:
+                    # For Mixed, select from each gender pool based on what's needed
+                    male_pool = males_sorted.copy()
+                    female_pool = females_sorted.copy()
 
-                if len(selected) == num_seats:
+                    # Select needed men
+                    for _ in range(need_men):
+                        if not male_pool:
+                            break
+                        top_n = 5 if optimize_for == 'adjusted' else 3
+                        candidates = male_pool[:min(top_n, len(male_pool))]
+                        weights = list(range(top_n, 0, -1))[:len(candidates)]
+                        chosen = random.choices(candidates, weights=weights)[0]
+                        selected.append(chosen)
+                        male_pool.remove(chosen)
+
+                    # Select needed women
+                    for _ in range(need_women):
+                        if not female_pool:
+                            break
+                        top_n = 5 if optimize_for == 'adjusted' else 3
+                        candidates = female_pool[:min(top_n, len(female_pool))]
+                        weights = list(range(top_n, 0, -1))[:len(candidates)]
+                        chosen = random.choices(candidates, weights=weights)[0]
+                        selected.append(chosen)
+                        female_pool.remove(chosen)
+                else:
+                    pool = sorted_rowers.copy()
+                    for _ in range(unlocked_seats):
+                        if not pool:
+                            break
+                        # Take from top candidates with weighted random (more diversity for adjusted)
+                        top_n = 5 if optimize_for == 'adjusted' else 3
+                        candidates = pool[:min(top_n, len(pool))]
+                        weights = list(range(top_n, 0, -1))[:len(candidates)]
+                        chosen = random.choices(candidates, weights=weights)[0]
+                        selected.append(chosen)
+                        pool.remove(chosen)
+
+                if len(selected) == unlocked_seats:
                     combo_key = tuple(sorted(r.name for r in selected))
                     if combo_key not in seen_combos:
                         seen_combos.add(combo_key)
                         debug_counts['total_tried'] += 1
                         result = self._evaluate_lineup(
                             selected, boat_class, target_distance, calc_method, predictor,
-                            gender, min_avg_age, rower_watts, debug_counts
+                            gender, min_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
                         )
                         if result:
                             results.append(result)
@@ -2218,8 +2416,38 @@ class LineupOptimizer:
 
     def _evaluate_lineup(self, rowers: List[Rower], boat_class: str, target_distance: int,
                          calc_method: str, predictor: str, gender: str, min_avg_age: int,
-                         rower_watts: Dict[str, float], debug_counts: Dict = None) -> Optional[Dict]:
-        """Evaluate a lineup combination and return results if valid."""
+                         rower_watts: Dict[str, float], debug_counts: Dict = None,
+                         locked_rowers: Optional[Dict[int, str]] = None, total_seats: Optional[int] = None) -> Optional[Dict]:
+        """Evaluate a lineup combination and return results if valid.
+
+        Args:
+            rowers: List of unlocked Rower objects to evaluate
+            locked_rowers: Dict mapping seat index to rower name (locked seats)
+            total_seats: Total number of seats in the boat (for merging locked rowers)
+        """
+        # Merge locked rowers with unlocked rowers to form full lineup
+        if locked_rowers and total_seats:
+            # Get locked rower objects
+            locked_rower_objects = {}
+            for seat_idx, name in locked_rowers.items():
+                locked_rower_obj = self.roster.get_rower(name)
+                if locked_rower_obj:
+                    locked_rower_objects[seat_idx] = locked_rower_obj
+
+            # Build full lineup: place locked rowers at their seats, fill rest with unlocked
+            full_rowers = [None] * total_seats
+            unlocked_idx = 0
+            for i in range(total_seats):
+                if i in locked_rower_objects:
+                    full_rowers[i] = locked_rower_objects[i]
+                elif unlocked_idx < len(rowers):
+                    full_rowers[i] = rowers[unlocked_idx]
+                    unlocked_idx += 1
+
+            if None in full_rowers:
+                return None  # Couldn't fill all seats
+            rowers = full_rowers
+
         # Check average age constraint
         avg_age = statistics.mean([r.age for r in rowers])
         if avg_age < min_avg_age:
@@ -2236,9 +2464,14 @@ class LineupOptimizer:
                 return None
 
         # For sweep boats, find valid seat assignment
+        # When we have locked rowers, we need a different approach to preserve their positions
         is_sculling = 'x' in boat_class.lower()
         if not is_sculling:
-            assigned = self._optimize_seat_assignment(rowers, boat_class)
+            if locked_rowers:
+                # With locked seats, use specialized assignment that preserves locked positions
+                assigned = self._optimize_seat_assignment_with_locks(rowers, boat_class, locked_rowers)
+            else:
+                assigned = self._optimize_seat_assignment(rowers, boat_class)
             if assigned is None:
                 if debug_counts is not None:
                     debug_counts['seat_rejected'] = debug_counts.get('seat_rejected', 0) + 1
@@ -4130,6 +4363,14 @@ def main():
     if 'boat_c' not in st.session_state:
         st.session_state.boat_c = None
 
+    # Initialize locked seats state for each lineup (set of seat indices)
+    if 'locked_seats_a' not in st.session_state:
+        st.session_state.locked_seats_a = set()
+    if 'locked_seats_b' not in st.session_state:
+        st.session_state.locked_seats_b = set()
+    if 'locked_seats_c' not in st.session_state:
+        st.session_state.locked_seats_c = set()
+
     # Initialize selected rower state
     if 'selected_rower' not in st.session_state:
         st.session_state.selected_rower = None
@@ -4157,6 +4398,12 @@ def main():
         st.session_state.autofill_use_event_constraints = False
     if 'autofill_checked_events' not in st.session_state:
         st.session_state.autofill_checked_events = set()
+    if 'show_autofill_controls' not in st.session_state:
+        st.session_state.show_autofill_controls = False
+
+    # Initialize excluded rowers set (for autofill exclusion)
+    if 'excluded_rowers' not in st.session_state:
+        st.session_state.excluded_rowers = set()
 
     # =========================================================================
     # HEADER: Logo, Title, and View Toggle
@@ -4310,6 +4557,10 @@ def main():
         st.session_state.boat_a = None
         st.session_state.boat_b = None
         st.session_state.boat_c = None
+        # Clear locked seats
+        st.session_state.locked_seats_a = set()
+        st.session_state.locked_seats_b = set()
+        st.session_state.locked_seats_c = set()
 
     # Check for pending boat class change from Find Available Athletes
     if 'pending_boat_class' in st.session_state:
@@ -4363,6 +4614,10 @@ def main():
                 st.session_state.boat_a = None
                 st.session_state.boat_b = None
                 st.session_state.boat_c = None
+                # Clear locked seats
+                st.session_state.locked_seats_a = set()
+                st.session_state.locked_seats_b = set()
+                st.session_state.locked_seats_c = set()
                 st.session_state.selected_rower = None
                 st.rerun()
 
@@ -4390,6 +4645,9 @@ def main():
             for i in range(min(len(current), num_seats)):
                 new_lineup[i] = current[i]
             st.session_state[lineup_key] = new_lineup
+            # Clear locked seats when boat class changes (seat indices may no longer be valid)
+            locked_key = f"locked_seats_{lineup_key.split('_')[1]}"
+            st.session_state[locked_key] = set()
 
     # Check if selected regatta has events (uses "|" separator for regatta+day combos)
     has_events = selected_regatta in roster_manager.regatta_events
@@ -4556,6 +4814,14 @@ def main():
             if constraint_warning:
                 st.warning(constraint_warning)
 
+            # Toggle for showing lock/exclude controls
+            st.session_state.show_autofill_controls = st.checkbox(
+                "🔒 Enable Locks & Exclusions",
+                value=st.session_state.show_autofill_controls,
+                key="show_autofill_controls_cb",
+                help="Show controls to lock seats (preserve during autofill) and exclude rowers from autofill"
+            )
+
         # Handle autofill button clicks
         if autofill_raw_clicked or autofill_adj_clicked:
             # Get min_avg_age from session state (more reliable than local variable)
@@ -4575,19 +4841,85 @@ def main():
             # Get effective constraints
             effective_gender = autofill_gender_constraint if autofill_use_constraints else autofill_gender
 
-            # Find optimal lineups
-            optimal_lineups = lineup_optimizer.find_optimal_lineups(
-                regatta=selected_regatta,
-                num_seats=num_rowing_seats,
-                boat_class=boat_class,
-                target_distance=target_distance,
-                calc_method=calc_method,
-                predictor=pace_predictor,
-                optimize_for=optimize_for,
-                gender=effective_gender,
-                min_avg_age=effective_min_avg_age,
-                num_results=num_lineups
-            )
+            # Helper to get locked rowers dict for a lineup slot
+            def get_locked_rowers_for_slot(slot: str) -> dict:
+                """Get dict of {seat_index: rower_name} for locked seats in a lineup."""
+                locked_seats = st.session_state.get(f'locked_seats_{slot}', set())
+                lineup = st.session_state.get(f'lineup_{slot}', [])
+                locked_rowers = {}
+                for seat_idx in locked_seats:
+                    if seat_idx < len(lineup) and lineup[seat_idx]:
+                        locked_rowers[seat_idx] = lineup[seat_idx]
+                return locked_rowers
+
+            # Determine which slot(s) we're filling and their locked rowers
+            if autofill_target == "All (Top 3)":
+                # Check if any lineup has locked seats
+                locks_a = get_locked_rowers_for_slot('a')
+                locks_b = get_locked_rowers_for_slot('b')
+                locks_c = get_locked_rowers_for_slot('c')
+                any_locks = bool(locks_a or locks_b or locks_c)
+
+                if any_locks:
+                    # If any lineup has locks, call separately for each so each respects its own locks
+                    all_optimal = []
+                    for slot, locked_rowers in [('a', locks_a), ('b', locks_b), ('c', locks_c)]:
+                        slot_lineups = lineup_optimizer.find_optimal_lineups(
+                            regatta=selected_regatta,
+                            num_seats=num_rowing_seats,
+                            boat_class=boat_class,
+                            target_distance=target_distance,
+                            calc_method=calc_method,
+                            predictor=pace_predictor,
+                            optimize_for=optimize_for,
+                            gender=effective_gender,
+                            min_avg_age=effective_min_avg_age,
+                            num_results=1,
+                            excluded_rowers=st.session_state.excluded_rowers,
+                            locked_rowers=locked_rowers
+                        )
+                        if slot_lineups:
+                            all_optimal.append(slot_lineups[0])
+                        else:
+                            all_optimal.append(None)
+                    optimal_lineups = [x for x in all_optimal if x is not None]
+                else:
+                    # No locks - use single call to get top 3 different lineups
+                    optimal_lineups = lineup_optimizer.find_optimal_lineups(
+                        regatta=selected_regatta,
+                        num_seats=num_rowing_seats,
+                        boat_class=boat_class,
+                        target_distance=target_distance,
+                        calc_method=calc_method,
+                        predictor=pace_predictor,
+                        optimize_for=optimize_for,
+                        gender=effective_gender,
+                        min_avg_age=effective_min_avg_age,
+                        num_results=3,
+                        excluded_rowers=st.session_state.excluded_rowers,
+                        locked_rowers=None
+                    )
+                    all_optimal = None  # Flag that we used single-call mode
+            else:
+                # Single lineup - get its locked rowers
+                target_slot = autofill_target.split()[-1].lower()  # "Lineup A" -> "a"
+                locked_rowers = get_locked_rowers_for_slot(target_slot)
+
+                # Find optimal lineups
+                optimal_lineups = lineup_optimizer.find_optimal_lineups(
+                    regatta=selected_regatta,
+                    num_seats=num_rowing_seats,
+                    boat_class=boat_class,
+                    target_distance=target_distance,
+                    calc_method=calc_method,
+                    predictor=pace_predictor,
+                    optimize_for=optimize_for,
+                    gender=effective_gender,
+                    min_avg_age=effective_min_avg_age,
+                    num_results=num_lineups,
+                    excluded_rowers=st.session_state.excluded_rowers,
+                    locked_rowers=locked_rowers
+                )
 
             if not optimal_lineups:
                 # Count eligible rowers for better error message
@@ -4600,6 +4932,22 @@ def main():
 
                 if len(eligible) < num_rowing_seats:
                     st.warning(f"Could not find valid lineup. Only {len(eligible)} eligible rowers with erg scores (need {num_rowing_seats}).")
+                elif effective_gender == "Mixed":
+                    # Check if we have enough of each gender for 50/50 split
+                    half_seats = num_rowing_seats // 2
+                    males = [r for r in eligible if r.gender == 'M']
+                    females = [r for r in eligible if r.gender == 'F']
+                    if len(males) < half_seats or len(females) < half_seats:
+                        st.warning(f"Could not find valid Mixed lineup. Need {half_seats} of each gender, "
+                                  f"but only have {len(males)} men and {len(females)} women with erg scores.")
+                    elif optimize_for == 'category' and effective_min_avg_age > 0:
+                        ages = sorted([r.age for r in eligible], reverse=True)
+                        max_avg_age = sum(ages[:num_rowing_seats]) / num_rowing_seats if ages else 0
+                        st.warning(f"Could not find Mixed lineup meeting category min age ({effective_min_avg_age}). "
+                                  f"Max possible avg age: {max_avg_age:.1f}")
+                    else:
+                        st.warning(f"Could not find valid Mixed lineup from {len(eligible)} eligible rowers "
+                                  f"({len(males)} men, {len(females)} women).")
                 elif optimize_for == 'category' and effective_min_avg_age > 0:
                     # Calculate max possible avg age from eligible rowers
                     ages = sorted([r.age for r in eligible], reverse=True)
@@ -4610,38 +4958,87 @@ def main():
                     st.warning(f"Could not find valid lineup from {len(eligible)} eligible rowers.")
             else:
                 # Assign lineups to slots
-                lineup_slots = []
-                if autofill_target == "Lineup A":
-                    lineup_slots = ['a']
-                elif autofill_target == "Lineup B":
-                    lineup_slots = ['b']
-                elif autofill_target == "Lineup C":
-                    lineup_slots = ['c']
-                else:  # All (Top 3)
-                    lineup_slots = ['a', 'b', 'c']
+                if autofill_target == "All (Top 3)":
+                    if all_optimal is not None:
+                        # Per-slot mode (with locks) - all_optimal has results for [a, b, c] in order
+                        # Each may be a result dict or None if it failed
+                        for slot, lineup_data in zip(['a', 'b', 'c'], all_optimal):
+                            if lineup_data:
+                                rower_names = lineup_data['rowers']
 
-                for i, slot in enumerate(lineup_slots):
-                    if i < len(optimal_lineups):
-                        lineup_data = optimal_lineups[i]
-                        rower_names = lineup_data['rowers']
+                                # Resize lineup if needed
+                                while len(rower_names) < num_rowing_seats:
+                                    rower_names.append(None)
 
-                        # Resize lineup if needed
-                        while len(rower_names) < num_rowing_seats:
-                            rower_names.append(None)
+                                setattr_name = f'lineup_{slot}'
+                                st.session_state[setattr_name] = rower_names[:num_rowing_seats]
 
-                        setattr_name = f'lineup_{slot}'
-                        st.session_state[setattr_name] = rower_names[:num_rowing_seats]
+                                # Format time for toast
+                                if optimize_for == 'adjusted':
+                                    time_val = lineup_data['adjusted_time']
+                                    time_label = "adj"
+                                else:
+                                    time_val = lineup_data['raw_time']
+                                    time_label = "raw"
+                                time_str = format_time(time_val)
+                                age_str = f"Avg age: {lineup_data['avg_age']:.1f}"
+                                st.toast(f"Lineup {slot.upper()}: {time_str} {time_label} ({age_str})")
+                    else:
+                        # Single-call mode (no locks) - optimal_lineups has top 3 different lineups
+                        for i, slot in enumerate(['a', 'b', 'c']):
+                            if i < len(optimal_lineups):
+                                lineup_data = optimal_lineups[i]
+                                rower_names = lineup_data['rowers']
 
-                        # Format time for toast
-                        if optimize_for == 'adjusted':
-                            time_val = lineup_data['adjusted_time']
-                            time_label = "adj"
-                        else:
-                            time_val = lineup_data['raw_time']
-                            time_label = "raw"
-                        time_str = format_time(time_val)
-                        age_str = f"Avg age: {lineup_data['avg_age']:.1f}"
-                        st.toast(f"Lineup {slot.upper()}: {time_str} {time_label} ({age_str})")
+                                # Resize lineup if needed
+                                while len(rower_names) < num_rowing_seats:
+                                    rower_names.append(None)
+
+                                setattr_name = f'lineup_{slot}'
+                                st.session_state[setattr_name] = rower_names[:num_rowing_seats]
+
+                                # Format time for toast
+                                if optimize_for == 'adjusted':
+                                    time_val = lineup_data['adjusted_time']
+                                    time_label = "adj"
+                                else:
+                                    time_val = lineup_data['raw_time']
+                                    time_label = "raw"
+                                time_str = format_time(time_val)
+                                age_str = f"Avg age: {lineup_data['avg_age']:.1f}"
+                                st.toast(f"Lineup {slot.upper()}: {time_str} {time_label} ({age_str})")
+                else:
+                    # Single lineup target
+                    lineup_slots = []
+                    if autofill_target == "Lineup A":
+                        lineup_slots = ['a']
+                    elif autofill_target == "Lineup B":
+                        lineup_slots = ['b']
+                    elif autofill_target == "Lineup C":
+                        lineup_slots = ['c']
+
+                    for i, slot in enumerate(lineup_slots):
+                        if i < len(optimal_lineups):
+                            lineup_data = optimal_lineups[i]
+                            rower_names = lineup_data['rowers']
+
+                            # Resize lineup if needed
+                            while len(rower_names) < num_rowing_seats:
+                                rower_names.append(None)
+
+                            setattr_name = f'lineup_{slot}'
+                            st.session_state[setattr_name] = rower_names[:num_rowing_seats]
+
+                            # Format time for toast
+                            if optimize_for == 'adjusted':
+                                time_val = lineup_data['adjusted_time']
+                                time_label = "adj"
+                            else:
+                                time_val = lineup_data['raw_time']
+                                time_label = "raw"
+                            time_str = format_time(time_val)
+                            age_str = f"Avg age: {lineup_data['avg_age']:.1f}"
+                            st.toast(f"Lineup {slot.upper()}: {time_str} {time_label} ({age_str})")
 
                 st.rerun()
 
@@ -4857,6 +5254,9 @@ def main():
             else:
                 return f"🔴{count}"
 
+        # Check if autofill controls should be shown
+        show_autofill_ui = st.session_state.get('show_autofill_controls', False)
+
         # Women section
         st.markdown(f"**Women ({len(women)})**")
         for name, rower in women:
@@ -4866,24 +5266,53 @@ def main():
             event_count = count_events_entered(name) if has_events else 0
             event_indicator = f" {format_event_indicator(event_count)}" if has_events else ""
 
+            # Check if rower is excluded (only show prefix when controls are visible)
+            is_excluded = name in st.session_state.excluded_rowers
+            exclude_prefix = "(X) " if (is_excluded and show_autofill_ui) else ""
+
             if not has_scores:
-                display_text = f"{name}{event_indicator} | (no scores)"
+                display_text = f"{exclude_prefix}{name}{event_indicator} | (no scores)"
             elif show_erg_time:
                 dist = 1000 if show_erg_time[0] == '1k' else 5000
                 erg_time = format_erg_time(rower, dist, show_erg_time[1])
-                display_text = f"{name}{event_indicator} | {erg_time}"
+                display_text = f"{exclude_prefix}{name}{event_indicator} | {erg_time}"
             else:
-                display_text = f"{name}{event_indicator} | {rower.age} | {side}"
+                display_text = f"{exclude_prefix}{name}{event_indicator} | {rower.age} | {side}"
 
             is_selected = (st.session_state.selected_rower == name)
             btn_type = "primary" if is_selected else "secondary"
 
-            if st.button(display_text, key=f"rower_{name}", use_container_width=True, type=btn_type, disabled=not has_scores):
-                if is_selected:
-                    st.session_state.selected_rower = None
-                else:
-                    st.session_state.selected_rower = name
-                st.rerun()
+            # Use columns for button and exclude toggle (only when autofill controls enabled)
+            if has_scores and show_autofill_ui:
+                roster_cols = st.columns([6, 1], vertical_alignment="center")
+                with roster_cols[0]:
+                    if st.button(display_text, key=f"rower_{name}", use_container_width=True, type=btn_type):
+                        if is_selected:
+                            st.session_state.selected_rower = None
+                        else:
+                            st.session_state.selected_rower = name
+                        st.rerun()
+                with roster_cols[1]:
+                    # Use checkbox for exclude toggle - checked means EXCLUDED
+                    new_excluded = st.checkbox(
+                        "X",
+                        value=is_excluded,
+                        key=f"exclude_{name}",
+                        label_visibility="collapsed"
+                    )
+                    if new_excluded != is_excluded:
+                        if new_excluded:
+                            st.session_state.excluded_rowers.add(name)
+                        else:
+                            st.session_state.excluded_rowers.discard(name)
+                        st.rerun()
+            else:
+                if st.button(display_text, key=f"rower_{name}", use_container_width=True, type=btn_type, disabled=not has_scores):
+                    if is_selected:
+                        st.session_state.selected_rower = None
+                    else:
+                        st.session_state.selected_rower = name
+                    st.rerun()
 
         st.divider()
 
@@ -4896,24 +5325,53 @@ def main():
             event_count = count_events_entered(name) if has_events else 0
             event_indicator = f" {format_event_indicator(event_count)}" if has_events else ""
 
+            # Check if rower is excluded (only show prefix when controls are visible)
+            is_excluded = name in st.session_state.excluded_rowers
+            exclude_prefix = "(X) " if (is_excluded and show_autofill_ui) else ""
+
             if not has_scores:
-                display_text = f"{name}{event_indicator} | (no scores)"
+                display_text = f"{exclude_prefix}{name}{event_indicator} | (no scores)"
             elif show_erg_time:
                 dist = 1000 if show_erg_time[0] == '1k' else 5000
                 erg_time = format_erg_time(rower, dist, show_erg_time[1])
-                display_text = f"{name}{event_indicator} | {erg_time}"
+                display_text = f"{exclude_prefix}{name}{event_indicator} | {erg_time}"
             else:
-                display_text = f"{name}{event_indicator} | {rower.age} | {side}"
+                display_text = f"{exclude_prefix}{name}{event_indicator} | {rower.age} | {side}"
 
             is_selected = (st.session_state.selected_rower == name)
             btn_type = "primary" if is_selected else "secondary"
 
-            if st.button(display_text, key=f"rower_{name}", use_container_width=True, type=btn_type, disabled=not has_scores):
-                if is_selected:
-                    st.session_state.selected_rower = None
-                else:
-                    st.session_state.selected_rower = name
-                st.rerun()
+            # Use columns for button and exclude toggle (only when autofill controls enabled)
+            if has_scores and show_autofill_ui:
+                roster_cols = st.columns([6, 1], vertical_alignment="center")
+                with roster_cols[0]:
+                    if st.button(display_text, key=f"rower_{name}", use_container_width=True, type=btn_type):
+                        if is_selected:
+                            st.session_state.selected_rower = None
+                        else:
+                            st.session_state.selected_rower = name
+                        st.rerun()
+                with roster_cols[1]:
+                    # Use checkbox for exclude toggle - checked means EXCLUDED
+                    new_excluded = st.checkbox(
+                        "X",
+                        value=is_excluded,
+                        key=f"exclude_{name}",
+                        label_visibility="collapsed"
+                    )
+                    if new_excluded != is_excluded:
+                        if new_excluded:
+                            st.session_state.excluded_rowers.add(name)
+                        else:
+                            st.session_state.excluded_rowers.discard(name)
+                        st.rerun()
+            else:
+                if st.button(display_text, key=f"rower_{name}", use_container_width=True, type=btn_type, disabled=not has_scores):
+                    if is_selected:
+                        st.session_state.selected_rower = None
+                    else:
+                        st.session_state.selected_rower = name
+                    st.rerun()
 
     # =========================================================================
     # MAIN AREA: Lineups or Dashboard (based on view mode)
@@ -5178,24 +5636,46 @@ def main():
                             st.session_state[cox_key] = None
                             st.rerun()
 
+            # Get the locked seats set for this lineup
+            lineup_letter = key.split('_')[1]  # 'a', 'b', or 'c'
+            locked_seats_key = f"locked_seats_{lineup_letter}"
+            locked_seats = st.session_state.get(locked_seats_key, set())
+
+            # Check if autofill controls should be shown
+            show_lock_controls = st.session_state.get('show_autofill_controls', False)
+
             for i, label in enumerate(seat_labels):
                 rower_name = lineup[i] if i < len(lineup) else None
+                is_locked = i in locked_seats
 
                 # Use secondary buttons for both, distinguish by text
+                # Add lock icon prefix when locked (only if controls are visible)
+                lock_prefix = "🔒 " if (is_locked and show_lock_controls) else ""
                 if rower_name:
-                    btn_label = f"{label}: {rower_name}"
+                    btn_label = f"{label}: {lock_prefix}{rower_name}"
                 else:
                     btn_label = f"{label}: ..."
 
-                seat_cols = st.columns([5, 1])
+                # Use 5:1:1 columns when lock controls are shown, otherwise 5:1
+                if show_lock_controls:
+                    seat_cols = st.columns([5, 1, 1])
+                else:
+                    seat_cols = st.columns([5, 1])
+
                 with seat_cols[0]:
                     if st.button(btn_label, key=f"seat_{key}_{i}", use_container_width=True):
-                        if st.session_state.selected_rower:
+                        # Only enforce lock restrictions when controls are visible
+                        if is_locked and show_lock_controls:
+                            st.warning(f"Seat {label} is locked. Unlock it first to modify.")
+                        elif st.session_state.selected_rower:
                             selected = st.session_state.selected_rower
                             if selected in lineup:
                                 # Rower is already in this lineup - move or swap
                                 old_pos = lineup.index(selected)
-                                if old_pos != i:
+                                # Check if old position is locked (only if controls visible)
+                                if old_pos in locked_seats and show_lock_controls:
+                                    st.warning(f"Cannot move {selected} - their current seat is locked.")
+                                elif old_pos != i:
                                     if rower_name:
                                         # Swap: put current seat's rower in selected's old position
                                         st.session_state[key][old_pos] = rower_name
@@ -5203,13 +5683,13 @@ def main():
                                         # Move: clear old position
                                         st.session_state[key][old_pos] = None
                                     st.session_state[key][i] = selected
-                                st.session_state.selected_rower = None
-                                st.rerun()
+                                    st.session_state.selected_rower = None
+                                    st.rerun()
+                                else:
+                                    st.session_state.selected_rower = None
+                                    st.rerun()
                             else:
                                 # Rower not in lineup yet - assign to seat
-                                if rower_name:
-                                    # Seat occupied - swap with selected rower's origin if any
-                                    pass  # Just replace for now
                                 st.session_state[key][i] = selected
                                 st.session_state.selected_rower = None
                                 st.rerun()
@@ -5217,11 +5697,33 @@ def main():
                             st.session_state.selected_rower = rower_name
                             st.rerun()
 
-                with seat_cols[1]:
-                    if rower_name:
-                        if st.button("❌", key=f"remove_{key}_{i}"):
-                            st.session_state[key][i] = None
-                            st.rerun()
+                if show_lock_controls:
+                    with seat_cols[1]:
+                        # Lock toggle button - only show if seat has a rower
+                        if rower_name:
+                            lock_icon = "🔓" if is_locked else "🔒"
+                            lock_help = "Unlock seat" if is_locked else "Lock seat (preserve during autofill)"
+                            if st.button(lock_icon, key=f"lock_{key}_{i}", use_container_width=True, help=lock_help):
+                                if is_locked:
+                                    locked_seats.discard(i)
+                                else:
+                                    locked_seats.add(i)
+                                st.session_state[locked_seats_key] = locked_seats
+                                st.rerun()
+
+                    with seat_cols[2]:
+                        # Delete button - only show if seat has a rower AND is not locked
+                        if rower_name and not is_locked:
+                            if st.button("❌", key=f"remove_{key}_{i}"):
+                                st.session_state[key][i] = None
+                                st.rerun()
+                else:
+                    with seat_cols[1]:
+                        # Delete button (no lock controls)
+                        if rower_name:
+                            if st.button("❌", key=f"remove_{key}_{i}"):
+                                st.session_state[key][i] = None
+                                st.rerun()
 
             # Copy buttons (also copy cox and boat for coxed boats)
             copy_cols = st.columns(2)
