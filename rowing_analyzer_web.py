@@ -3512,6 +3512,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                 background-color: #fff;
                 border: 1px solid #ccc;
                 z-index: 1;
+                color: #333;
             }
             .minimap-table tr:nth-child(even) td.athlete-name {
                 background-color: #fafafa;
@@ -3814,6 +3815,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
             background-color: #ffffff;
             z-index: 1;
             border-right: 2px solid #999;
+            color: #333;
         }
         .dashboard-table tr:nth-child(odd) .athlete-name {
             background-color: #ffffff;
