@@ -4405,11 +4405,19 @@ def main():
     if 'excluded_rowers' not in st.session_state:
         st.session_state.excluded_rowers = set()
 
+    # Initialize help dialog state
+    if 'show_help' not in st.session_state:
+        st.session_state.show_help = False
+
+    # Initialize events dialog state
+    if 'show_events_dialog' not in st.session_state:
+        st.session_state.show_events_dialog = False
+
     # =========================================================================
     # HEADER: Logo, Title, and View Toggle
     # =========================================================================
 
-    title_cols = st.columns([1, 8, 2])
+    title_cols = st.columns([1, 6, 2, 1, 1])
     with title_cols[0]:
         st.image("wrc-badge-red.png", width=50)
     with title_cols[1]:
@@ -4426,6 +4434,169 @@ def main():
             if st.button("🚣 Switch to Lineup Sandbox", type="primary", use_container_width=True):
                 st.session_state.view_mode = 'lineup'
                 st.rerun()
+    with title_cols[3]:
+        if st.button("📋 Events", key="events_btn", use_container_width=True):
+            st.session_state.show_events_dialog = True
+    with title_cols[4]:
+        if st.button("❓ Help", key="help_btn", use_container_width=True):
+            st.session_state.show_help = True
+
+    # Help Guide Dialog
+    @st.dialog("Getting Started Guide", width="large")
+    def show_help_dialog():
+        """Render the in-app help guide for new users."""
+        st.markdown("""
+This app helps you **build optimal boat lineups** and **manage regatta entries**.
+
+**Two main views:**
+- **Lineup Sandbox** - Build and compare crew lineups
+- **Regatta Dashboard** - Overview of entries, conflicts, and scheduling
+""")
+
+        st.markdown("---")
+        st.markdown("### Quick Start (5 Steps)")
+
+        with st.expander("**1. Select Your Regatta**", expanded=False):
+            st.markdown("""
+Use the dropdown at the top to pick your regatta. Options include:
+- **All Rowers** - See your complete roster
+- **Specific regattas** - Filter to athletes signed up for that event
+
+If a regatta has multiple days, each day appears separately.
+""")
+
+        with st.expander("**2. Choose Boat Class**", expanded=False):
+            st.markdown("""
+Select the boat type from the dropdown (4+, 8+, 2x, etc.).
+
+The app will adjust seat positions and split calculations automatically.
+""")
+
+        with st.expander("**3. Build Your Lineup**", expanded=False):
+            st.markdown("""
+**Manual method:**
+- Click rower names in the sidebar roster
+- They fill into the next empty seat
+- Click again to remove them
+
+**Autofill method:**
+- Expand the "Autofill" panel
+- Select gender and target lineup column
+- Click "Autofill" to find the fastest crew based on erg scores
+- Use "Raw" for pure speed or "Adjusted" for age-handicapped predictions
+""")
+
+        with st.expander("**4. Assign Cox & Boat**", expanded=False):
+            st.markdown("""
+For coxed boats:
+- Use the **Cox** dropdown to assign a coxswain
+- Use the **Boat** dropdown to assign club equipment
+
+These selections travel with the lineup when entered into events.
+""")
+
+        with st.expander("**5. Enter Into Events**", expanded=False):
+            st.markdown("""
+- Eligible events appear in the Events panel (right side)
+- Events are filtered by gender, boat class, and age category
+- Click **"Enter into Event"** to register your lineup
+- The entry saves automatically to Google Sheets
+""")
+
+        st.markdown("---")
+        st.markdown("### Key Features")
+
+        with st.expander("**Autofill - Finding Optimal Crews**", expanded=False):
+            st.markdown("""
+The Autofill feature ranks rowers by erg time and fills the fastest available crew.
+
+**Options:**
+- **Raw** = Pure erg speed (2k times)
+- **Adjusted** = Age-handicapped erg (uses US Rowing factors)
+- **Use Event Constraints** = Auto-apply gender/age rules from checked events
+
+**Locks & Exclusions** (enable via checkbox):
+- **Lock** 🔒 = Keep this rower in this specific seat
+- **Exclude** ☑️ = Skip this rower entirely during autofill
+""")
+
+        with st.expander("**Regatta Dashboard**", expanded=False):
+            st.markdown("""
+The Dashboard view shows:
+- **All entries** for the selected regatta day
+- **Hot-seating conflicts** (rowers in back-to-back events)
+- **Missing assignments** (no cox, no boat)
+- **Timeline view** of event schedule
+
+Use **"Find Available"** to see which rowers are free for a specific event.
+""")
+
+        with st.expander("**Erg-to-Water Predictions**", expanded=False):
+            st.markdown("""
+When enabled (toggle in Lineup Sandbox), the app applies:
+- **Boat factors** (different speeds for 4+, 8+, 2x, etc.)
+- **Stroke adjustments** (stroke seat gets slight speed bump)
+- **Distance scaling** for different race lengths
+
+This gives predicted on-water splits, not just erg times.
+""")
+
+        st.markdown("---")
+        st.markdown("### Color Indicators Reference")
+
+        st.markdown("""
+| Indicator | Meaning |
+|-----------|---------|
+| 🟢 Green | Safe - 90+ min gap between events, or 0-2 total events |
+| 🟡 Yellow | Moderate - 60-89 min gap, or 3 events total |
+| 🟠 Orange | Tight - 30-59 min gap, or 4 events total |
+| 🔴 Red | Conflict - <30 min gap, or 5+ events total |
+| 📣 | Missing coxswain assignment |
+| 🚣 | Missing boat assignment |
+| ⭐ | Priority/targeted event |
+""")
+
+        st.markdown("---")
+        st.markdown("### Tips & Best Practices")
+
+        with st.expander("**Using Locks & Exclusions Effectively**", expanded=False):
+            st.markdown("""
+- **Lock your stroke seat** first if you have a designated stroke
+- **Exclude injured or unavailable** rowers before autofilling
+- **Build multiple lineups** (A, B, C columns) to compare options
+- Locks are per-seat, so you can lock different people in different lineups
+""")
+
+        with st.expander("**Hot-Seating Guidelines**", expanded=False):
+            st.markdown("""
+Masters regattas often require hot-seating (same rower in multiple boats).
+
+- **90+ minutes** between events = comfortable, no issues
+- **60-89 minutes** = doable but tight, consider proximity on course
+- **30-59 minutes** = risky, only if events are adjacent
+- **<30 minutes** = conflict, likely not possible
+
+The Dashboard flags these automatically with color codes.
+""")
+
+        with st.expander("**Comparing Lineups**", expanded=False):
+            st.markdown("""
+Use the A, B, C lineup columns to:
+- Build multiple crew options side-by-side
+- Compare predicted times for different combinations
+- Enter the best option into events
+
+Clear buttons at the top of each column reset that lineup.
+""")
+
+        st.markdown("---")
+        if st.button("Close", type="primary", use_container_width=True):
+            st.rerun()
+
+    # Show help dialog if triggered
+    if st.session_state.get('show_help', False):
+        st.session_state.show_help = False
+        show_help_dialog()
 
     # =========================================================================
     # CONTROLS: Regatta (always), plus Distance, Boat, etc. (lineup mode only)
@@ -4651,8 +4822,230 @@ def main():
 
     # Check if selected regatta has events (uses "|" separator for regatta+day combos)
     has_events = selected_regatta in roster_manager.regatta_events
-    # Always show events when regatta has events
-    show_events_panel = has_events
+
+    # Events Dialog
+    @st.dialog("Events", width="large")
+    def show_events_dialog():
+        """Render events list in a dialog."""
+        # Get events for selected regatta/day
+        events = roster_manager.regatta_events.get(selected_regatta, [])
+
+        if not events:
+            st.info("No events available for this regatta.")
+            if st.button("Close", type="primary", use_container_width=True):
+                st.rerun()
+            return
+
+        # Filter checkbox
+        show_targeted_only = st.checkbox("Targeted Only", value=True, key="targeted_events_filter_dialog")
+
+        # Filter if checkbox checked
+        if show_targeted_only:
+            events = [e for e in events if e.include]
+
+        # Helper to normalize day strings for comparison (remove leading zeros)
+        def normalize_day(day_str: str) -> str:
+            """Normalize day string: 'Sunday, March 08, 2026' -> 'sunday, march 8, 2026'"""
+            import re
+            # Remove leading zeros from day numbers and lowercase
+            normalized = re.sub(r'\b0(\d)', r'\1', day_str.lower())
+            return normalized
+
+        # Helper to check if entry matches event (handles format differences)
+        def entry_matches_event(entry: dict, event) -> bool:
+            if entry['event_number'] != event.event_number:
+                return False
+            # Normalize day comparison
+            if normalize_day(entry['day']) != normalize_day(event.day):
+                return False
+            # Check regatta - exact match or partial match
+            entry_regatta = entry['regatta'].lower()
+            event_regatta = event.regatta.lower()
+            if entry_regatta == event_regatta:
+                return True
+            # Partial match - one contains the other
+            if entry_regatta in event_regatta or event_regatta in entry_regatta:
+                return True
+            return False
+
+        # Helper to check if entry is missing cox for a coxed boat
+        def is_missing_cox(entry: dict) -> bool:
+            boat = entry.get('boat_class', '')
+            if '+' not in boat:
+                return False  # Not a coxed boat
+            rowers = entry.get('rowers', [])
+            # 4+ needs 5 people (4 rowers + cox), 8+ needs 9 people (8 rowers + cox)
+            expected_count = {'4+': 5, '8+': 9}.get(boat, 0)
+            return len(rowers) < expected_count
+
+        # Helper to check if entry is missing boat assignment
+        def is_missing_boat(entry: dict) -> bool:
+            boat = entry.get('boat', '')
+            return not boat or boat.strip() == ''
+
+        # Display event list with entry indicators and autofill checkboxes
+        for event in events:
+            priority_marker = "⭐ " if event.priority else ""
+
+            # Check for entries in this event
+            event_entries = [e for e in st.session_state.event_entries
+                            if entry_matches_event(e, event)]
+
+            # Build event label
+            event_time_str = format_event_time(event.event_time)
+
+            if event_entries:
+                # Show event with entry count as expander
+                entry_count = len(event_entries)
+                # Check if any entry is missing cox or boat
+                any_missing_cox = any(is_missing_cox(e) for e in event_entries)
+                any_missing_boat = any(is_missing_boat(e) for e in event_entries)
+                cox_warning = "📣 " if any_missing_cox else ""
+                boat_warning = "🚣 " if any_missing_boat else ""
+
+                # Checkbox for autofill (inline before expander)
+                is_checked = event.event_number in st.session_state.autofill_checked_events
+                chk_col, exp_col = st.columns([0.08, 0.92], gap="small")
+                with chk_col:
+                    event_check = st.checkbox("", value=is_checked,
+                                               key=f"dialog_autofill_event_check_{event.event_number}")
+                with exp_col:
+                    with st.expander(f"{event_time_str} {priority_marker}{cox_warning}{boat_warning}{event.event_name} [{entry_count}]"):
+                        for entry_idx, entry in enumerate(event_entries):
+                            avg_age_display = entry.get('avg_age', '-')
+                            # Show warnings if this entry is missing cox or boat
+                            entry_warnings = []
+                            if is_missing_cox(entry):
+                                entry_warnings.append("📣 Needs Cox")
+                            if is_missing_boat(entry):
+                                entry_warnings.append("🚣 Needs Boat")
+                            warning_str = " ".join(entry_warnings)
+                            boat_display = f" | Boat: {entry.get('boat')}" if entry.get('boat') else ""
+                            st.markdown(f"**Entry {entry['entry_number']}** - {entry['boat_class']} {entry['category']} (Avg: {avg_age_display}){boat_display} {warning_str}")
+                            # Show rowers
+                            rower_list = ", ".join(entry['rowers'])
+                            st.caption(rower_list)
+                            # Edit and Remove buttons
+                            btn_cols = st.columns(2)
+                            with btn_cols[0]:
+                                if st.button("✏️ Edit", key=f"dialog_edit_{event.event_number}_{entry['entry_number']}_{entry_idx}", help="Edit in Lineup A"):
+                                    # Load entry into Lineup A for editing
+                                    entry_boat = entry.get('boat_class', '4+')
+                                    entry_rowers = entry.get('rowers', [])
+                                    is_coxed = '+' in entry_boat
+
+                                    # Use pending flag for boat class (will be processed before widget renders on rerun)
+                                    st.session_state.pending_boat_class = entry_boat
+
+                                    # For coxed boats, last rower is cox
+                                    boat_seats = {'1x': 1, '2x': 2, '2-': 2, '4x': 4, '4+': 4, '4-': 4, '8+': 8}
+                                    expected_seats = boat_seats.get(entry_boat, 4)
+
+                                    if is_coxed and entry_rowers:
+                                        if len(entry_rowers) > expected_seats:
+                                            # Has cox - split rowers and cox
+                                            seat_rowers = entry_rowers[:expected_seats]
+                                            cox = entry_rowers[expected_seats]
+                                        else:
+                                            # No cox assigned
+                                            seat_rowers = entry_rowers
+                                            cox = None
+                                        st.session_state.lineup_a = seat_rowers + [None] * (expected_seats - len(seat_rowers))
+                                        st.session_state.cox_a = cox
+                                    else:
+                                        # Non-coxed boat
+                                        st.session_state.lineup_a = entry_rowers + [None] * (expected_seats - len(entry_rowers))
+                                        st.session_state.cox_a = None
+
+                                    # Restore club boat assignment (use pending flag for widget sync)
+                                    st.session_state.pending_boat_a = entry.get('boat', None)
+
+                                    # Store original entry for edit mode
+                                    st.session_state.editing_entry = entry.copy()
+                                    st.session_state.editing_event = event
+
+                                    # Switch to lineup view
+                                    st.session_state.view_mode = 'lineup'
+                                    st.toast(f"Editing Entry {entry['entry_number']} for {event.event_name}")
+                                    st.rerun()
+                            with btn_cols[1]:
+                                if st.button("🗑️ Remove", key=f"dialog_remove_{event.event_number}_{entry['entry_number']}_{entry_idx}", help="Remove entry"):
+                                    # Delete from Google Sheets
+                                    if delete_entry_from_gsheet(entry):
+                                        st.toast("Entry removed from Google Sheets")
+                                    st.session_state.event_entries.remove(entry)
+                                    # Clear edit mode if we just deleted the entry being edited
+                                    editing = st.session_state.get('editing_entry')
+                                    if editing and editing.get('entry_number') == entry.get('entry_number') and editing.get('event_number') == entry.get('event_number'):
+                                        del st.session_state['editing_entry']
+                                        if 'editing_event' in st.session_state:
+                                            del st.session_state['editing_event']
+                                    st.rerun()
+
+                # Handle checkbox state change (for events with entries)
+                if event_check and event.event_number not in st.session_state.autofill_checked_events:
+                    st.session_state.autofill_checked_events.add(event.event_number)
+                    st.rerun()
+                elif not event_check and event.event_number in st.session_state.autofill_checked_events:
+                    st.session_state.autofill_checked_events.discard(event.event_number)
+                    st.rerun()
+
+            else:
+                # No entries - show checkbox with event name inline
+                is_checked = event.event_number in st.session_state.autofill_checked_events
+                event_label = f"{event_time_str} {priority_marker}{event.event_name}"
+                event_check = st.checkbox(
+                    event_label,
+                    value=is_checked,
+                    key=f"dialog_autofill_event_check_{event.event_number}",
+                )
+                # Handle checkbox state change
+                if event_check and event.event_number not in st.session_state.autofill_checked_events:
+                    st.session_state.autofill_checked_events.add(event.event_number)
+                    st.rerun()
+                elif not event_check and event.event_number in st.session_state.autofill_checked_events:
+                    st.session_state.autofill_checked_events.discard(event.event_number)
+                    st.rerun()
+
+        # Export button at bottom of event panel
+        if st.session_state.event_entries:
+            st.divider()
+            # Create CSV data
+            csv_lines = ["Regatta,Day,Event Number,Event Name,Event Time,Entry Number,Boat Class,Category,Avg Age,Lineup,Boat,Timestamp"]
+            for entry in st.session_state.event_entries:
+                lineup_str = format_lineup_string(entry['rowers'], entry['boat_class'])
+                # Escape commas in fields
+                csv_lines.append(",".join([
+                    f'"{entry["regatta"]}"',
+                    f'"{entry["day"]}"',
+                    str(entry['event_number']),
+                    f'"{entry["event_name"]}"',
+                    f'"{entry["event_time"]}"',
+                    str(entry['entry_number']),
+                    entry['boat_class'],
+                    f'"{entry["category"]}"',
+                    str(entry.get('avg_age', '')),
+                    f'"{lineup_str}"',
+                    f'"{entry.get("boat", "")}"',
+                    entry['timestamp']
+                ]))
+            csv_data = "\n".join(csv_lines)
+            st.download_button(
+                label="📥 Export CSV",
+                data=csv_data,
+                file_name="event_entries.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+        st.divider()
+        if st.button("Close", type="primary", use_container_width=True):
+            st.rerun()
+
+    # Show events dialog if triggered
+    if st.session_state.get('show_events_dialog', False):
+        st.session_state.show_events_dialog = False
+        show_events_dialog()
 
     # Lineup mode: show Settings and Autofill expanders
     if st.session_state.view_mode == 'lineup':
@@ -5510,13 +5903,8 @@ def main():
             gender = 'M'  # Default
         return (avg_age, category, gender)
 
-    # Create columns based on whether events panel is shown
-    if show_events_panel and has_events:
-        lineup_cols = st.columns([1, 1, 1, 0.6])
-        event_col = lineup_cols[3]
-    else:
-        lineup_cols = st.columns(3)
-        event_col = None
+    # Create 3 equal columns for lineups (events now in dialog)
+    lineup_cols = st.columns(3)
 
     lineups_config = [
         ("Lineup A", "lineup_a", lineup_cols[0]),
@@ -5819,11 +6207,11 @@ def main():
                     </html>
                 """, height=36, scrolling=False)
 
-            # "Enter Lineup into Event" buttons (only when events panel is active)
+            # "Enter Lineup into Event" buttons (only when regatta has events)
             # Check if all seats are filled (cox is optional for entry)
             seats_filled = len([r for r in lineup if r is not None])
             # Don't show "Enter into" when in edit mode - use Save Changes instead
-            if show_events_panel and has_events and seats_filled == num_seats and not st.session_state.get('editing_entry'):
+            if has_events and seats_filled == num_seats and not st.session_state.get('editing_entry'):
                 # Get lineup stats for eligibility check
                 stats = get_lineup_stats(lineup, roster_manager)
                 if stats:
@@ -5841,7 +6229,7 @@ def main():
 
                     # Show buttons for eligible events
                     # Prioritize: 1) Events checked for autofill, 2) Targeted events, 3) Other eligible
-                    targeted_filter = st.session_state.get("targeted_events_filter", True)
+                    targeted_filter = st.session_state.get("targeted_events_filter_dialog", True)
                     autofill_checked = st.session_state.get('autofill_checked_events', set())
 
                     # Always include events checked for autofill (user explicitly selected them)
@@ -5904,216 +6292,6 @@ def main():
                                     st.toast(f"Entry saved to Google Sheets")
                                 st.session_state.event_entries.append(new_entry)
                                 st.rerun()
-
-    # Event panel (right column when shown)
-    if event_col:
-        with event_col:
-            st.markdown("**Events**")
-
-            # Filter checkbox
-            show_targeted_only = st.checkbox("Targeted Only", value=True, key="targeted_events_filter")
-
-            # Get events for selected regatta/day
-            events = roster_manager.regatta_events.get(selected_regatta, [])
-
-            # Filter if checkbox checked
-            if show_targeted_only:
-                events = [e for e in events if e.include]
-
-            # Helper to normalize day strings for comparison (remove leading zeros)
-            def normalize_day(day_str: str) -> str:
-                """Normalize day string: 'Sunday, March 08, 2026' -> 'sunday, march 8, 2026'"""
-                import re
-                # Remove leading zeros from day numbers and lowercase
-                normalized = re.sub(r'\b0(\d)', r'\1', day_str.lower())
-                return normalized
-
-            # Helper to check if entry matches event (handles format differences)
-            def entry_matches_event(entry: dict, event) -> bool:
-                if entry['event_number'] != event.event_number:
-                    return False
-                # Normalize day comparison
-                if normalize_day(entry['day']) != normalize_day(event.day):
-                    return False
-                # Check regatta - exact match or partial match
-                entry_regatta = entry['regatta'].lower()
-                event_regatta = event.regatta.lower()
-                if entry_regatta == event_regatta:
-                    return True
-                # Partial match - one contains the other
-                if entry_regatta in event_regatta or event_regatta in entry_regatta:
-                    return True
-                return False
-
-            # Helper to check if entry is missing cox for a coxed boat
-            def is_missing_cox(entry: dict) -> bool:
-                boat = entry.get('boat_class', '')
-                if '+' not in boat:
-                    return False  # Not a coxed boat
-                rowers = entry.get('rowers', [])
-                # 4+ needs 5 people (4 rowers + cox), 8+ needs 9 people (8 rowers + cox)
-                expected_count = {'4+': 5, '8+': 9}.get(boat, 0)
-                return len(rowers) < expected_count
-
-            # Helper to check if entry is missing boat assignment
-            def is_missing_boat(entry: dict) -> bool:
-                boat = entry.get('boat', '')
-                return not boat or boat.strip() == ''
-
-            # Display event list with entry indicators and autofill checkboxes
-            for event in events:
-                priority_marker = "⭐ " if event.priority else ""
-
-                # Check for entries in this event
-                event_entries = [e for e in st.session_state.event_entries
-                                if entry_matches_event(e, event)]
-
-                # Build event label
-                event_time_str = format_event_time(event.event_time)
-
-                if event_entries:
-                    # Show event with entry count as expander
-                    entry_count = len(event_entries)
-                    # Check if any entry is missing cox or boat
-                    any_missing_cox = any(is_missing_cox(e) for e in event_entries)
-                    any_missing_boat = any(is_missing_boat(e) for e in event_entries)
-                    cox_warning = "📣 " if any_missing_cox else ""
-                    boat_warning = "🚣 " if any_missing_boat else ""
-
-                    # Checkbox for autofill (inline before expander)
-                    is_checked = event.event_number in st.session_state.autofill_checked_events
-                    chk_col, exp_col = st.columns([0.15, 9.85], gap="small")
-                    with chk_col:
-                        event_check = st.checkbox("", value=is_checked,
-                                                   key=f"autofill_event_check_{event.event_number}")
-                    with exp_col:
-                        with st.expander(f"{event_time_str} {priority_marker}{cox_warning}{boat_warning}{event.event_name} [{entry_count}]"):
-                            for entry_idx, entry in enumerate(event_entries):
-                                avg_age_display = entry.get('avg_age', '-')
-                                # Show warnings if this entry is missing cox or boat
-                                entry_warnings = []
-                                if is_missing_cox(entry):
-                                    entry_warnings.append("📣 Needs Cox")
-                                if is_missing_boat(entry):
-                                    entry_warnings.append("🚣 Needs Boat")
-                                warning_str = " ".join(entry_warnings)
-                                boat_display = f" | Boat: {entry.get('boat')}" if entry.get('boat') else ""
-                                st.markdown(f"**Entry {entry['entry_number']}** - {entry['boat_class']} {entry['category']} (Avg: {avg_age_display}){boat_display} {warning_str}")
-                                # Show rowers
-                                rower_list = ", ".join(entry['rowers'])
-                                st.caption(rower_list)
-                                # Edit and Remove buttons
-                                btn_cols = st.columns(2)
-                                with btn_cols[0]:
-                                    if st.button("✏️", key=f"edit_{event.event_number}_{entry['entry_number']}_{entry_idx}", help="Edit in Lineup A"):
-                                        # Load entry into Lineup A for editing
-                                        entry_boat = entry.get('boat_class', '4+')
-                                        entry_rowers = entry.get('rowers', [])
-                                        is_coxed = '+' in entry_boat
-
-                                        # Use pending flag for boat class (will be processed before widget renders on rerun)
-                                        st.session_state.pending_boat_class = entry_boat
-
-                                        # For coxed boats, last rower is cox
-                                        boat_seats = {'1x': 1, '2x': 2, '2-': 2, '4x': 4, '4+': 4, '4-': 4, '8+': 8}
-                                        expected_seats = boat_seats.get(entry_boat, 4)
-
-                                        if is_coxed and entry_rowers:
-                                            if len(entry_rowers) > expected_seats:
-                                                # Has cox - split rowers and cox
-                                                seat_rowers = entry_rowers[:expected_seats]
-                                                cox = entry_rowers[expected_seats]
-                                            else:
-                                                # No cox assigned
-                                                seat_rowers = entry_rowers
-                                                cox = None
-                                            st.session_state.lineup_a = seat_rowers + [None] * (expected_seats - len(seat_rowers))
-                                            st.session_state.cox_a = cox
-                                        else:
-                                            # Non-coxed boat
-                                            st.session_state.lineup_a = entry_rowers + [None] * (expected_seats - len(entry_rowers))
-                                            st.session_state.cox_a = None
-
-                                        # Restore club boat assignment (use pending flag for widget sync)
-                                        st.session_state.pending_boat_a = entry.get('boat', None)
-
-                                        # Store original entry for edit mode
-                                        st.session_state.editing_entry = entry.copy()
-                                        st.session_state.editing_event = event
-
-                                        # Switch to lineup view
-                                        st.session_state.view_mode = 'lineup'
-                                        st.toast(f"Editing Entry {entry['entry_number']} for {event.event_name}")
-                                        st.rerun()
-                                with btn_cols[1]:
-                                    if st.button("🗑️", key=f"remove_{event.event_number}_{entry['entry_number']}_{entry_idx}", help="Remove entry"):
-                                        # Delete from Google Sheets
-                                        if delete_entry_from_gsheet(entry):
-                                            st.toast("Entry removed from Google Sheets")
-                                        st.session_state.event_entries.remove(entry)
-                                        # Clear edit mode if we just deleted the entry being edited
-                                        editing = st.session_state.get('editing_entry')
-                                        if editing and editing.get('entry_number') == entry.get('entry_number') and editing.get('event_number') == entry.get('event_number'):
-                                            del st.session_state['editing_entry']
-                                            if 'editing_event' in st.session_state:
-                                                del st.session_state['editing_event']
-                                        st.rerun()
-
-                    # Handle checkbox state change (for events with entries)
-                    if event_check and event.event_number not in st.session_state.autofill_checked_events:
-                        st.session_state.autofill_checked_events.add(event.event_number)
-                        st.rerun()
-                    elif not event_check and event.event_number in st.session_state.autofill_checked_events:
-                        st.session_state.autofill_checked_events.discard(event.event_number)
-                        st.rerun()
-
-                else:
-                    # No entries - show checkbox with event name inline
-                    is_checked = event.event_number in st.session_state.autofill_checked_events
-                    event_label = f"{event_time_str} {priority_marker}{event.event_name}"
-                    event_check = st.checkbox(
-                        event_label,
-                        value=is_checked,
-                        key=f"autofill_event_check_{event.event_number}",
-                    )
-                    # Handle checkbox state change
-                    if event_check and event.event_number not in st.session_state.autofill_checked_events:
-                        st.session_state.autofill_checked_events.add(event.event_number)
-                        st.rerun()
-                    elif not event_check and event.event_number in st.session_state.autofill_checked_events:
-                        st.session_state.autofill_checked_events.discard(event.event_number)
-                        st.rerun()
-
-            # Export button at bottom of event panel
-            if st.session_state.event_entries:
-                st.divider()
-                # Create CSV data
-                csv_lines = ["Regatta,Day,Event Number,Event Name,Event Time,Entry Number,Boat Class,Category,Avg Age,Lineup,Boat,Timestamp"]
-                for entry in st.session_state.event_entries:
-                    lineup_str = format_lineup_string(entry['rowers'], entry['boat_class'])
-                    # Escape commas in fields
-                    csv_lines.append(",".join([
-                        f'"{entry["regatta"]}"',
-                        f'"{entry["day"]}"',
-                        str(entry['event_number']),
-                        f'"{entry["event_name"]}"',
-                        f'"{entry["event_time"]}"',
-                        str(entry['entry_number']),
-                        entry['boat_class'],
-                        f'"{entry["category"]}"',
-                        str(entry.get('avg_age', '')),
-                        f'"{lineup_str}"',
-                        f'"{entry.get("boat", "")}"',
-                        entry['timestamp']
-                    ]))
-                csv_data = "\n".join(csv_lines)
-                st.download_button(
-                    label="Export CSV",
-                    data=csv_data,
-                    file_name="event_entries.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
 
     # Analysis Results
     st.divider()
