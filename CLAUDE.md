@@ -6,7 +6,7 @@ A Streamlit-based rowing lineup analysis tool for masters rowing clubs.
 - **Python** with Streamlit for the web interface
 - **Google Sheets** integration for data persistence (roster, erg scores, event entries)
 - **Pandas** for data manipulation
-- Single file app: `rowing_analyzer_web.py` (~6800 lines)
+- Single file app: `rowing_analyzer_web.py` (~7100 lines)
 
 ## Core Features
 
@@ -21,7 +21,7 @@ A Streamlit-based rowing lineup analysis tool for masters rowing clubs.
 - **Power Law**: Personalized fatigue curves when athlete has multiple test distances
 - **Age handicap**: US Rowing masters handicap factors
 - **Erg-to-water conversion**: BioRow/Kleshnev boat factors for on-water predictions
-- **% of GMS**: Compare lineup's raw time against Gold Medal Standards (loaded from separate Google Sheet)
+- **% of GMS**: Compare lineup's raw time against Gold Medal Standards (see GMS section below)
 - Port/starboard wattage balance calculations
 
 ### Regatta Management
@@ -67,6 +67,32 @@ A Streamlit-based rowing lineup analysis tool for masters rowing clubs.
 │  Split/Time  │  Split/Time  │  Split/Time  │           │
 └──────────────┴──────────────┴──────────────┴───────────┘
 ```
+
+## Gold Medal Standards (GMS)
+
+Compares lineup's projected raw time against historical gold medal winning times.
+
+### Configuration
+- Separate Google Sheet configured via `gms_spreadsheet_id` in Streamlit secrets
+- Sheet must have columns: `regatta`, `distance_m`, `boat_class`, `gender`, `age_category`, `gms_time_sec`
+
+### Matching Logic
+- **Regatta**: Fuzzy matching with punctuation removed (e.g., "Cascadia" matches "Cascadia Masters")
+- **Distance**: ±300m tolerance (e.g., 4700m matches 4828m HOCR course)
+- **Category**: Maps letter codes (A-J) to various formats:
+  - Simple: `30+`, `40+`, `50+`, `60+`, `70+`, `80+`
+  - HOCR-style: `grand master (50-59)`, `veteran (60+)`, etc.
+- **Gender**: Tries multiple formats (`m`, `w`, `mixed`, `x`)
+
+### Display
+- Shows "% of GMS (raw)" in analysis card
+- 100% = matches gold medal pace exactly
+- <100% = slower than gold medal pace
+- "-" = no matching GMS data found
+
+### Status
+- Feature is functional but may need additional category mappings for some regattas
+- Currently uses raw time only (handicap-adjusted comparison planned for future)
 
 ## Recent Changes (Jan 2026)
 
