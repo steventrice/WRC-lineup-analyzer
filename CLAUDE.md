@@ -21,6 +21,7 @@ A Streamlit-based rowing lineup analysis tool for masters rowing clubs.
 - **Power Law**: Personalized fatigue curves when athlete has multiple test distances
 - **Age handicap**: US Rowing masters handicap factors
 - **Erg-to-water conversion**: BioRow/Kleshnev boat factors for on-water predictions
+- **% of GMS**: Compare lineup's raw time against Gold Medal Standards (loaded from separate Google Sheet)
 - Port/starboard wattage balance calculations
 
 ### Regatta Management
@@ -44,9 +45,10 @@ A Streamlit-based rowing lineup analysis tool for masters rowing clubs.
 ## Data Flow
 
 1. **Google Sheets** → `RosterManager` loads roster, erg scores, club boats, regattas, events
-2. User builds lineups in **Sandbox** columns
-3. `BoatAnalyzer.analyze_lineup()` calculates projections when lineup is full
-4. Entries saved back to **Google Sheets** via `save_entry_to_gsheet()`
+2. **GMS Sheet** → `RosterManager.load_gms_from_google_sheets()` loads Gold Medal Standards (separate sheet via `gms_spreadsheet_id` secret)
+3. User builds lineups in **Sandbox** columns
+4. `BoatAnalyzer.analyze_lineup()` calculates projections when lineup is full
+5. Entries saved back to **Google Sheets** via `save_entry_to_gsheet()`
 
 ## UI Layout (Sandbox Mode)
 
@@ -68,6 +70,7 @@ A Streamlit-based rowing lineup analysis tool for masters rowing clubs.
 
 ## Recent Changes (Jan 2026)
 
+- **% of GMS**: Analysis cards now show lineup's raw time as percentage of Gold Medal Standard (matches regatta, boat class, gender, age category)
 - **Inline auto-analysis**: Removed Analyze button; results appear automatically below each full lineup
 - **Placement badges**: Show both raw and adjusted finish positions
 - **Race This Lineup**: Single popover button replaced multiple event entry buttons

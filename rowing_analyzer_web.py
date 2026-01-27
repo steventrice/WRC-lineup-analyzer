@@ -819,6 +819,8 @@ class RosterManager:
         self.name_map: Dict[str, str] = {}  # Maps variations to canonical names
         self.regatta_events: Dict[str, List[RegattaEvent]] = {}  # keyed by "RegattaName|Day"
         self.club_boats: List[str] = []  # List of club boat names
+        self.gms_standards: Dict[tuple, float] = {}  # (regatta, distance, boat_class, gender, category) -> time_sec
+        self.gms_regatta_names: List[str] = []  # Unique regatta names in GMS data for matching
 
     def log(self, msg: str):
         self.load_log.append(msg)
@@ -1556,6 +1558,297 @@ class RosterManager:
         self.club_boats.append("Private Boat")
 
         self.log(f"Loaded {len(self.club_boats)} club boats (including Private Boat option)")
+
+    def load_gms_from_google_sheets(self, spreadsheet_id: str, credentials_dict: dict) -> bool:
+        """Load Gold Medal Standards from a separate Google Sheet"""
+        try:
+            if not GSPREAD_AVAILABLE:
+                self.log("GMS: gspread not available")
+                return False
+
+            self.log(f"Loading GMS from: {spreadsheet_id}")
+
+            scopes = [
+                'https://www.googleapis.com/auth/spreadsheets.readonly',
+                'https://www.googleapis.com/auth/drive.readonly'
+            ]
+            creds = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
+            client = gspread.authorize(creds)
+
+            spreadsheet = client.open_by_key(spreadsheet_id)
+
+            # Find the GMS sheet - look for one with expected columns
+            worksheets = spreadsheet.worksheets()
+            self.log(f"GMS: Found {len(worksheets)} sheets: {[ws.title for ws in worksheets]}")
+
+            worksheet = None
+            gms_sheet_name = None
+
+            # First try sheets with likely names
+            for name in ['GMS', 'Gold Medal Standards', 'Standards', 'GMS_Data', 'Data']:
+                for ws in worksheets:
+                    if ws.title.lower() == name.lower():
+                        worksheet = ws
+                        gms_sheet_name = ws.title
+                        break
+                if worksheet:
+                    break
+
+            # If not found by name, check each sheet for expected columns
+            if not worksheet:
+                for ws in worksheets:
+                    try:
+                        headers = ws.row_values(1)
+                        headers_lower = [h.lower() for h in headers]
+                        # Check if this sheet has GMS-like columns
+                        if any('regatta' in h for h in headers_lower) and any('boat' in h for h in headers_lower):
+                            worksheet = ws
+                            gms_sheet_name = ws.title
+                            self.log(f"GMS: Found data sheet '{gms_sheet_name}' by column inspection")
+                            break
+                    except:
+                        continue
+
+            if not worksheet:
+                self.log("GMS: No sheet with GMS data found")
+                return False
+
+            self.log(f"GMS: Using sheet '{gms_sheet_name}'")
+            data = worksheet.get_all_values()
+
+            if len(data) < 2:
+                self.log("GMS: No data rows")
+                return False
+
+            headers = [h.lower().strip() for h in data[0]]
+            rows = data[1:]
+
+            # Map column indices
+            col_map = {}
+            for i, h in enumerate(headers):
+                if 'regatta' in h:
+                    col_map['regatta'] = i
+                elif h == 'distance_m' or h == 'distance':
+                    col_map['distance'] = i
+                elif 'boat' in h and 'class' in h or h == 'boat_class':
+                    col_map['boat_class'] = i
+                elif h == 'gender':
+                    col_map['gender'] = i
+                elif 'age' in h and 'cat' in h or h == 'age_category' or h == 'category':
+                    col_map['category'] = i
+                elif h == 'gms_time_sec' or h == 'time_sec' or h == 'gms_time':
+                    col_map['time_sec'] = i
+
+            required = ['regatta', 'distance', 'boat_class', 'gender', 'category', 'time_sec']
+            missing = [r for r in required if r not in col_map]
+            if missing:
+                self.log(f"GMS: Missing columns: {missing}. Found headers: {headers}")
+                return False
+
+            self.gms_standards = {}
+            regatta_names = set()
+
+            for row in rows:
+                try:
+                    regatta = str(row[col_map['regatta']]).strip()
+                    distance = int(float(row[col_map['distance']]))
+                    boat_class = str(row[col_map['boat_class']]).strip()
+                    gender = str(row[col_map['gender']]).strip()
+                    category = str(row[col_map['category']]).strip()
+                    time_sec = float(row[col_map['time_sec']])
+
+                    if regatta and distance and boat_class and time_sec > 0:
+                        key = (regatta.lower(), distance, boat_class.lower(), gender.lower(), category.lower())
+                        self.gms_standards[key] = time_sec
+                        regatta_names.add(regatta)
+                except (ValueError, IndexError):
+                    continue
+
+            self.gms_regatta_names = sorted(regatta_names)
+            self.log(f"Loaded {len(self.gms_standards)} GMS standards for {len(self.gms_regatta_names)} regattas")
+            return True
+
+        except Exception as e:
+            self.log(f"GMS loading error: {e}")
+            return False
+
+    def get_gms_time(self, regatta: str, distance: int, boat_class: str,
+                     gender: str, category: str) -> Optional[float]:
+        """Look up Gold Medal Standard time for given parameters.
+
+        Args:
+            regatta: Regatta name (fuzzy matched)
+            distance: Race distance in meters
+            boat_class: Boat class (e.g., "8+", "4x")
+            gender: "M", "W", or "Mixed"
+            category: Age category (e.g., "A", "B", "C")
+
+        Returns:
+            GMS time in seconds, or None if not found
+        """
+        if not self.gms_standards:
+            return None
+
+        # Normalize inputs
+        boat_class_lower = boat_class.lower().strip()
+        gender_input = gender.lower().strip()
+        # Build list of possible gender values to try
+        if gender_input in ['m', 'men', "men's"]:
+            possible_genders = ['m', 'men', 'male']
+        elif gender_input in ['w', 'f', 'women', "women's"]:
+            possible_genders = ['w', 'women', 'f', 'female']
+        elif gender_input in ['mix', 'mixed', 'x']:
+            possible_genders = ['mixed', 'mix', 'x', 'mxd']
+        else:
+            possible_genders = [gender_input]
+        category_lower = category.lower().strip()
+
+        # Handle "RegattaName|Day" format - extract just the regatta name
+        regatta_name = regatta.split("|")[0] if "|" in regatta else regatta
+        # Remove punctuation and extra whitespace for matching
+        import re
+        regatta_lower = re.sub(r'[^\w\s]', '', regatta_name.lower()).strip()
+        matched_regatta = None
+
+        # First try exact match
+        for gms_regatta in self.gms_regatta_names:
+            if gms_regatta.lower() == regatta_lower:
+                matched_regatta = gms_regatta.lower()
+                break
+
+        # Then try partial match (regatta name contains or is contained by)
+        if not matched_regatta:
+            for gms_regatta in self.gms_regatta_names:
+                gms_lower = gms_regatta.lower()
+                # Check if key words match
+                if (regatta_lower in gms_lower or gms_lower in regatta_lower or
+                    any(word in gms_lower for word in regatta_lower.split() if len(word) > 3)):
+                    matched_regatta = gms_lower
+                    break
+
+        if not matched_regatta:
+            self.log(f"GMS lookup: No regatta match for '{regatta_lower}'")
+            return None
+
+        # Map letter category to descriptive names used in GMS
+        # US Rowing Masters categories: AA (21-26), A (27-35), B (36-42), C (43-49),
+        # D (50-54), E (55-59), F (60-64), G (65-69), H (70-74), I (75-79), J (80+)
+        # Some regattas use: 30+, 40+, 50+, 60+, 70+, 80+
+        category_mappings = {
+            'aa': ['aa', 'open', 'club', '21+'],
+            'a': ['a', 'masters a', 'master (27-35)', 'open', 'club', '27+', '30+'],
+            'b': ['b', 'masters b', 'master (36-42)', 'veteran (40-49)', '36+', '30+', '40+'],
+            'c': ['c', 'masters c', 'master (43-49)', 'veteran (40-49)', 'senior master (40-49)', '43+', '40+'],
+            'd': ['d', 'masters d', 'master (50-54)', 'grand master (50-59)', 'senior master (50-59)', '50+'],
+            'e': ['e', 'masters e', 'master (55-59)', 'grand master (50-59)', 'senior master (50-59)', '50+', '55+'],
+            'f': ['f', 'masters f', 'master (60-64)', 'veteran (60+)', 'great grand master (60-69)', '60+', '50+'],
+            'g': ['g', 'masters g', 'master (65-69)', 'veteran (60+)', 'great grand master (60-69)', '60+', '65+', '50+'],
+            'h': ['h', 'masters h', 'master (70-74)', 'veteran (70-79)', '70+', '60+', '50+'],
+            'i': ['i', 'masters i', 'master (75-79)', 'veteran (70-79)', '70+', '75+', '60+', '50+'],
+            'j': ['j', 'masters j', 'master (80+)', 'grand veteran (80+)', 'grand veteran i (80-84)', 'grand veteran ii (85+)', '80+', '70+', '60+', '50+'],
+        }
+
+        # Get possible category names to search for
+        possible_categories = category_mappings.get(category_lower, [category_lower])
+
+        # Find distances within tolerance (±300m) for this regatta
+        regatta_distances = set(k[1] for k in self.gms_standards.keys() if k[0] == matched_regatta)
+        closest_distance = min(regatta_distances, key=lambda d: abs(d - distance), default=distance)
+        # Only use closest if within 300m
+        if abs(closest_distance - distance) > 300:
+            closest_distance = distance
+
+        # Try each combination of possible genders and categories
+        tried_keys = []
+        for gender_try in possible_genders:
+            for cat in possible_categories:
+                key = (matched_regatta, closest_distance, boat_class_lower, gender_try, cat)
+                tried_keys.append(key)
+                result = self.gms_standards.get(key)
+                if result:
+                    return result
+
+        return None
+
+    def get_gms_time_debug(self, regatta: str, distance: int, boat_class: str,
+                           gender: str, category: str) -> Tuple[Optional[float], str]:
+        """Same as get_gms_time but returns debug info as second value."""
+        if not self.gms_standards:
+            return None, "No GMS data loaded"
+
+        # Normalize inputs
+        boat_class_lower = boat_class.lower().strip()
+        gender_input = gender.lower().strip()
+        if gender_input in ['m', 'men', "men's"]:
+            possible_genders = ['m', 'men', 'male']
+        elif gender_input in ['w', 'f', 'women', "women's"]:
+            possible_genders = ['w', 'women', 'f', 'female']
+        elif gender_input in ['mix', 'mixed', 'x']:
+            possible_genders = ['mixed', 'mix', 'x', 'mxd']
+        else:
+            possible_genders = [gender_input]
+        category_lower = category.lower().strip()
+
+        # Handle "RegattaName|Day" format
+        regatta_name = regatta.split("|")[0] if "|" in regatta else regatta
+        # Remove punctuation and extra whitespace for matching
+        import re
+        regatta_lower = re.sub(r'[^\w\s]', '', regatta_name.lower()).strip()
+        matched_regatta = None
+
+        for gms_regatta in self.gms_regatta_names:
+            if gms_regatta.lower() == regatta_lower:
+                matched_regatta = gms_regatta.lower()
+                break
+        if not matched_regatta:
+            for gms_regatta in self.gms_regatta_names:
+                gms_lower = gms_regatta.lower()
+                if (regatta_lower in gms_lower or gms_lower in regatta_lower or
+                    any(word in gms_lower for word in regatta_lower.split() if len(word) > 3)):
+                    matched_regatta = gms_lower
+                    break
+
+        if not matched_regatta:
+            return None, f"No regatta match for '{regatta_lower}'"
+
+        # Category mappings - includes various formats used by different regattas
+        # US Rowing: AA, A, B, C, D, E, F, G, H, I, J
+        # Some regattas use: 30+, 40+, 50+, 60+, 70+, 80+
+        # HOCR uses: master, senior master, grand master, veteran, etc.
+        category_mappings = {
+            'aa': ['aa', 'open', 'club', '21+'],
+            'a': ['a', 'masters a', 'master (27-35)', 'open', 'club', '27+', '30+'],
+            'b': ['b', 'masters b', 'master (36-42)', 'veteran (40-49)', '36+', '30+', '40+'],
+            'c': ['c', 'masters c', 'master (43-49)', 'veteran (40-49)', 'senior master (40-49)', '43+', '40+'],
+            'd': ['d', 'masters d', 'master (50-54)', 'grand master (50-59)', 'senior master (50-59)', '50+'],
+            'e': ['e', 'masters e', 'master (55-59)', 'grand master (50-59)', 'senior master (50-59)', '50+', '55+'],
+            'f': ['f', 'masters f', 'master (60-64)', 'veteran (60+)', 'great grand master (60-69)', '60+', '50+'],
+            'g': ['g', 'masters g', 'master (65-69)', 'veteran (60+)', 'great grand master (60-69)', '60+', '65+', '50+'],
+            'h': ['h', 'masters h', 'master (70-74)', 'veteran (70-79)', '70+', '60+', '50+'],
+            'i': ['i', 'masters i', 'master (75-79)', 'veteran (70-79)', '70+', '75+', '60+', '50+'],
+            'j': ['j', 'masters j', 'master (80+)', 'grand veteran (80+)', 'grand veteran i (80-84)', 'grand veteran ii (85+)', '80+', '70+', '60+', '50+'],
+        }
+        possible_categories = category_mappings.get(category_lower, [category_lower])
+
+        # Find closest distance
+        regatta_distances = set(k[1] for k in self.gms_standards.keys() if k[0] == matched_regatta)
+        closest_distance = min(regatta_distances, key=lambda d: abs(d - distance), default=distance)
+        if abs(closest_distance - distance) > 300:
+            closest_distance = distance
+
+        # Try each combination
+        tried_keys = []
+        for gender_try in possible_genders:
+            for cat in possible_categories:
+                key = (matched_regatta, closest_distance, boat_class_lower, gender_try, cat)
+                tried_keys.append(key)
+                result = self.gms_standards.get(key)
+                if result:
+                    return result, f"Found: {key} = {result:.1f}s"
+
+        # Build debug info
+        existing_keys = [k for k in self.gms_standards.keys() if k[0] == matched_regatta and k[2] == boat_class_lower][:3]
+        return None, f"Tried {len(tried_keys)} keys, none matched. First tried: {tried_keys[0]}. Existing {boat_class_lower} keys: {existing_keys}"
 
     def get_rower(self, name: str) -> Optional[Rower]:
         return self.rowers.get(name)
@@ -2681,6 +2974,16 @@ def get_event_entries_sheet_id():
         return None
 
 
+def get_gms_spreadsheet_id():
+    """Get the Gold Medal Standards Google Sheet ID from secrets"""
+    try:
+        if "gms_spreadsheet_id" in st.secrets:
+            return st.secrets["gms_spreadsheet_id"]
+        return None
+    except Exception:
+        return None
+
+
 def shorten_names(names: List[str]) -> List[str]:
     """Convert full names to short format: First or FirstL if duplicate first names.
 
@@ -3136,6 +3439,13 @@ def _load_data_impl():
         try:
             success = roster_manager.load_from_google_sheets(spreadsheet_id, credentials)
             if success:
+                # Also load GMS data from separate sheet if configured
+                gms_sheet_id = get_gms_spreadsheet_id()
+                if gms_sheet_id:
+                    try:
+                        roster_manager.load_gms_from_google_sheets(gms_sheet_id, credentials)
+                    except Exception as gms_err:
+                        roster_manager.log(f"GMS load failed (non-fatal): {gms_err}")
                 return roster_manager, None, "google_sheets"
             else:
                 errors.append(f"Google Sheets load failed: {'; '.join(roster_manager.load_log[-3:])}")
@@ -6445,6 +6755,20 @@ Clear buttons at the top of each column reset that lineup.
                         stbd_w = f"{result['starboard_watts_total']:.0f}" if result.get('starboard_watts_total') else "-"
                         pct_diff = f"{result['side_balance_pct']:.1f}%" if result.get('side_balance_pct') else "-"
 
+                        # Calculate % of GMS (Gold Medal Standard)
+                        lineup_gender = result.get('lineup_gender', 'M')
+                        # Convert lineup gender format to GMS format
+                        gms_gender = {'M': 'M', 'W': 'W', 'Mix': 'Mixed'}.get(lineup_gender, lineup_gender)
+
+                        gms_time = roster_manager.get_gms_time(
+                            selected_regatta, target_distance, boat_class, gms_gender, masters_cat
+                        )
+                        if gms_time and gms_time > 0:
+                            gms_pct = (gms_time / raw_time) * 100
+                            gms_display = f"{gms_pct:.1f}%"
+                        else:
+                            gms_display = "-"
+
                         # Place badge classes and labels
                         adj_place_class = f"place-{adj_place}" if adj_place <= 3 else ""
                         adj_place_label = ["1st", "2nd", "3rd"][adj_place-1] if adj_place <= 3 else f"{adj_place}th"
@@ -6471,6 +6795,10 @@ Clear buttons at the top of each column reset that lineup.
                             <div class="analysis-stat">
                                 <span class="stat-label">Adjusted</span>
                                 <span class="stat-value" style="color: #28a745; font-weight: 700;">{format_time(adjusted_time)}</span>
+                            </div>
+                            <div class="analysis-stat">
+                                <span class="stat-label">% of GMS (raw)</span>
+                                <span class="stat-value">{gms_display}</span>
                             </div>
                             <div class="analysis-stat">
                                 <span class="stat-label">Avg Watts</span>
