@@ -4656,7 +4656,7 @@ Clear buttons at the top of each column reset that lineup.
     # Different layouts for Dashboard vs Lineup Sandbox
     if st.session_state.view_mode == 'lineup':
         # Lineup mode: show all controls in a row
-        control_cols = st.columns([2, 2, 2, 2, 2, 2])
+        control_cols = st.columns([2, 2, 2, 2, 2])
         with control_cols[0]:
             selected_regatta_display = st.selectbox(
                 "Regatta",
@@ -4771,10 +4771,6 @@ Clear buttons at the top of each column reset that lineup.
             st.session_state.selected_boat_class = boat_class
 
         with control_cols[3]:
-            if st.button("Analyze", type="primary", use_container_width=True):
-                st.session_state.analyze_clicked = True
-
-        with control_cols[4]:
             if st.button("Clear All", type="secondary", use_container_width=True):
                 boat_seats = {'1x': 1, '2x': 2, '2-': 2, '4x': 4, '4+': 4, '4-': 4, '8+': 8}
                 num_seats = boat_seats.get(boat_class, 4)
@@ -4794,7 +4790,7 @@ Clear buttons at the top of each column reset that lineup.
                 st.session_state.selected_rower = None
                 st.rerun()
 
-        with control_cols[5]:
+        with control_cols[4]:
             if st.button("Reload", type="secondary", use_container_width=True, help=f"Reload data from Google Sheets"):
                 st.session_state.cache_version += 1
                 # Also reload event entries
@@ -6209,10 +6205,10 @@ Clear buttons at the top of each column reset that lineup.
                     </html>
                 """, height=36, scrolling=False)
 
-            # "Enter Lineup into Event" buttons (only when regatta has events)
+            # "Race This Lineup" button with popover for event selection
             # Check if all seats are filled (cox is optional for entry)
             seats_filled = len([r for r in lineup if r is not None])
-            # Don't show "Enter into" when in edit mode - use Save Changes instead
+            # Don't show when in edit mode - use Save Changes instead
             if has_events and seats_filled == num_seats and not st.session_state.get('editing_entry'):
                 # Get lineup stats for eligibility check
                 stats = get_lineup_stats(lineup, roster_manager)
@@ -6225,150 +6221,347 @@ Clear buttons at the top of each column reset that lineup.
                     # Find eligible events
                     eligible_events = []
                     for event in available_events:
-                        # Only check targeted events if filter is on (will be checked when rendering)
                         if is_lineup_eligible_for_event(lineup_gender, avg_age, boat_class, event):
                             eligible_events.append(event)
 
-                    # Show buttons for eligible events
                     # Prioritize: 1) Events checked for autofill, 2) Targeted events, 3) Other eligible
                     targeted_filter = st.session_state.get("targeted_events_filter_dialog", True)
                     autofill_checked = st.session_state.get('autofill_checked_events', set())
 
-                    # Always include events checked for autofill (user explicitly selected them)
                     checked_events = [e for e in eligible_events if e.event_number in autofill_checked]
                     if targeted_filter:
                         other_events = [e for e in eligible_events if e.include and e.event_number not in autofill_checked]
                     else:
                         other_events = [e for e in eligible_events if e.event_number not in autofill_checked]
 
-                    # Checked events first, then others
                     events_to_show = checked_events + other_events
 
                     if events_to_show:
-                        st.markdown("**Enter into:**")
-                        for event in events_to_show[:3]:  # Limit to 3 buttons to avoid clutter
-                            # Create unique key for this button
-                            btn_key = f"enter_{key}_{event.event_number}"
-                            # Shorten event name for button
-                            short_name = event.event_name[:20] + "..." if len(event.event_name) > 20 else event.event_name
+                        # Check if this lineup is already entered in any eligible event
+                        current_rowers_set = set(rower_names_list)
+                        entered_event_numbers = set()
+                        for existing in st.session_state.event_entries:
+                            if set(existing.get('rowers', [])) == current_rowers_set:
+                                entered_event_numbers.add(existing['event_number'])
 
-                            # Check if this exact lineup is already entered in this event
-                            current_rowers_set = set(rower_names_list)
-                            already_entered = False
-                            for existing in st.session_state.event_entries:
-                                if (existing['event_number'] == event.event_number
-                                    and existing['regatta'] == event.regatta
-                                    and existing['day'] == event.day
-                                    and set(existing.get('rowers', [])) == current_rowers_set):
-                                    already_entered = True
-                                    break
+                        # Filter to events not yet entered
+                        available_to_enter = [e for e in events_to_show if e.event_number not in entered_event_numbers]
 
-                            if already_entered:
-                                st.button(f"✓ Entered: {short_name}", key=btn_key, use_container_width=True, disabled=True)
-                            elif st.button(f"{format_event_time(event.event_time)} {short_name}", key=btn_key, use_container_width=True):
-                                # Create entry
-                                from datetime import datetime
-                                # Count existing entries for this event to get entry number
-                                existing_entries = [e for e in st.session_state.event_entries
-                                                   if e['event_number'] == event.event_number
-                                                   and e['regatta'] == event.regatta
-                                                   and e['day'] == event.day]
-                                entry_number = len(existing_entries) + 1
+                        if available_to_enter:
+                            with st.popover("Race This Lineup", use_container_width=True):
+                                st.markdown("**Select event:**")
+                                for event in available_to_enter:
+                                    btn_key = f"race_{key}_{event.event_number}"
+                                    short_name = event.event_name[:25] + "..." if len(event.event_name) > 25 else event.event_name
+                                    btn_label = f"{format_event_time(event.event_time)} {short_name}"
 
-                                new_entry = {
-                                    'regatta': event.regatta,
-                                    'day': event.day,
-                                    'event_number': event.event_number,
-                                    'event_name': event.event_name,
-                                    'event_time': event.event_time,
-                                    'entry_number': entry_number,
-                                    'boat_class': boat_class,
-                                    'category': f"{lineup_gender} {category}",
-                                    'avg_age': round(avg_age, 1),
-                                    'rowers': rower_names_list.copy(),
-                                    'boat': st.session_state.get(boat_key, ''),  # Club boat assignment
-                                    'timestamp': datetime.now().isoformat()
-                                }
-                                # Save to Google Sheets
-                                if save_entry_to_gsheet(new_entry):
-                                    st.toast(f"Entry saved to Google Sheets")
-                                st.session_state.event_entries.append(new_entry)
-                                st.rerun()
+                                    if st.button(btn_label, key=btn_key, use_container_width=True):
+                                        from datetime import datetime
+                                        existing_entries = [e for e in st.session_state.event_entries
+                                                           if e['event_number'] == event.event_number
+                                                           and e['regatta'] == event.regatta
+                                                           and e['day'] == event.day]
+                                        entry_number = len(existing_entries) + 1
 
-    # Analysis Results
-    st.divider()
-    st.subheader("Analysis Results")
+                                        new_entry = {
+                                            'regatta': event.regatta,
+                                            'day': event.day,
+                                            'event_number': event.event_number,
+                                            'event_name': event.event_name,
+                                            'event_time': event.event_time,
+                                            'entry_number': entry_number,
+                                            'boat_class': boat_class,
+                                            'category': f"{lineup_gender} {category}",
+                                            'avg_age': round(avg_age, 1),
+                                            'rowers': rower_names_list.copy(),
+                                            'boat': st.session_state.get(boat_key, ''),
+                                            'timestamp': datetime.now().isoformat()
+                                        }
+                                        if save_entry_to_gsheet(new_entry):
+                                            st.toast(f"Entry saved to Google Sheets")
+                                        st.session_state.event_entries.append(new_entry)
+                                        st.rerun()
+                        elif entered_event_numbers:
+                            # All eligible events already have this lineup entered
+                            st.button("✓ Lineup Entered", key=f"entered_{key}", use_container_width=True, disabled=True)
 
-    if st.session_state.get('analyze_clicked', False):
-        st.session_state.analyze_clicked = False
+    # Inline Analysis Results - auto-analyze full lineups and display below each column
+    # CSS for fade-in animation
+    st.markdown("""
+    <style>
+    @keyframes fadeSlideIn {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    .analysis-card {
+        animation: fadeSlideIn 0.3s ease-out;
+        padding: 0.75rem;
+        border-radius: 8px;
+        background: linear-gradient(135deg, rgba(49, 51, 63, 0.03) 0%, rgba(49, 51, 63, 0.06) 100%);
+        border: 1px solid rgba(49, 51, 63, 0.1);
+        margin-top: 0.5rem;
+    }
+    .analysis-card h4 {
+        margin: 0 0 0.5rem 0;
+        font-size: 0.9rem;
+        color: rgb(49, 51, 63);
+    }
+    .analysis-stat {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.25rem 0;
+        border-bottom: 1px solid rgba(49, 51, 63, 0.05);
+    }
+    .analysis-stat:last-child {
+        border-bottom: none;
+    }
+    .stat-label {
+        color: rgba(49, 51, 63, 0.7);
+        font-size: 0.85rem;
+    }
+    .stat-value {
+        font-weight: 600;
+        font-size: 0.85rem;
+    }
+    .place-badge {
+        display: inline-block;
+        padding: 0.15rem 0.5rem;
+        border-radius: 12px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+    }
+    .place-1 { background: linear-gradient(135deg, #ffd700 0%, #ffed4a 100%); color: #5a4a00; }
+    .place-2 { background: linear-gradient(135deg, #c0c0c0 0%, #e8e8e8 100%); color: #4a4a4a; }
+    .place-3 { background: linear-gradient(135deg, #cd7f32 0%, #daa06d 100%); color: #4a3520; }
+    </style>
+    """, unsafe_allow_html=True)
 
-        # Check for partially filled lineups
-        partial_lineups = []
-        for lineup_id, key in [("A", "lineup_a"), ("B", "lineup_b"), ("C", "lineup_c")]:
-            lineup = st.session_state[key]
-            filled_seats = [r for r in lineup if r is not None]
-            # Partially filled = has some rowers but not all seats filled
-            if filled_seats and len(filled_seats) < len(lineup):
-                partial_lineups.append(lineup_id)
+    # Helper to determine lineup gender from rowers
+    def get_lineup_gender(rower_names: List[str]) -> str:
+        """Determine gender for lineup - 'M', 'W', or 'Mix'"""
+        genders = set()
+        for name in rower_names:
+            rower = roster_manager.get_rower(name)
+            if rower:
+                g = rower.gender.upper() if rower.gender else 'M'
+                if g == 'F':
+                    g = 'W'
+                genders.add(g)
+        if len(genders) == 1:
+            return genders.pop()
+        elif len(genders) > 1:
+            return 'Mix'
+        return 'M'
 
-        if partial_lineups:
-            lineup_names = ", ".join([f"Lineup {lid}" for lid in partial_lineups])
-            st.error(f"{lineup_names} {'is' if len(partial_lineups) == 1 else 'are'} partially filled. Please fill all seats or clear the lineup before analyzing.")
-            # Skip analysis when there are partial lineups
-            st.session_state.analysis_skipped = True
-        else:
-            st.session_state.analysis_skipped = False
+    # Analyze all full lineups and store results
+    analysis_results = {}
+    all_results = []  # For ranking across lineups
 
-        results = []
+    for lineup_id, key in [("A", "lineup_a"), ("B", "lineup_b"), ("C", "lineup_c")]:
+        lineup = st.session_state[key]
+        filled_seats = [r for r in lineup if r is not None]
 
-        # Helper to determine lineup gender from rowers
-        def get_lineup_gender(rower_names: List[str]) -> str:
-            """Determine gender for lineup - 'M', 'W', or 'Mix'"""
-            genders = set()
-            for name in rower_names:
-                rower = roster_manager.get_rower(name)
-                if rower:
-                    g = rower.gender.upper() if rower.gender else 'M'
-                    # Convert 'F' (Female) to 'W' (Women) for rowing convention
-                    if g == 'F':
-                        g = 'W'
-                    genders.add(g)
-            if len(genders) == 1:
-                return genders.pop()
-            elif len(genders) > 1:
-                return 'Mix'
-            return 'M'  # Default
+        # Only analyze if lineup is completely full (all seats filled)
+        if len(filled_seats) == len(lineup) and filled_seats:
+            result = analyzer.analyze_lineup(filled_seats, target_distance, boat_class, calc_method, pace_predictor)
+            result['lineup_id'] = lineup_id
+            result['lineup_key'] = key
+            result['rower_names'] = filled_seats
+            result['lineup_display'] = format_lineup_display(lineup_id, filled_seats, boat_class)
+            result['lineup_gender'] = get_lineup_gender(filled_seats)
+            result['tech_efficiency'] = lineup_tech_efficiencies.get(key, 1.05)
+            analysis_results[lineup_id] = result
+            all_results.append(result)
 
-        # Only run analysis if no partial lineups were detected
-        if not st.session_state.get('analysis_skipped', False):
-            for lineup_id, key in [("A", "lineup_a"), ("B", "lineup_b"), ("C", "lineup_c")]:
-                lineup = st.session_state[key]
-                rower_names_in_lineup = [r for r in lineup if r is not None]
+    # Sort all results by adjusted time to determine rankings
+    def sort_key(r):
+        if 'error' in r and 'avg_watts' not in r:
+            return float('inf')
+        return r.get('adjusted_time', float('inf'))
 
-                if rower_names_in_lineup:
-                    result = analyzer.analyze_lineup(rower_names_in_lineup, target_distance, boat_class, calc_method, pace_predictor)
-                    result['lineup_id'] = lineup_id
-                    # Store rower names for display formatting
-                    result['rower_names'] = rower_names_in_lineup
-                    result['lineup_display'] = format_lineup_display(lineup_id, rower_names_in_lineup, boat_class)
-                    # Store lineup gender for erg-to-water conversion
-                    result['lineup_gender'] = get_lineup_gender(rower_names_in_lineup)
-                    # Store per-lineup tech efficiency (from widget value captured earlier)
-                    result['tech_efficiency'] = lineup_tech_efficiencies.get(key, 1.05)
-                    results.append(result)
+    all_results.sort(key=sort_key)
 
-        if results:
-            # Sort by adjusted time
-            def sort_key(r):
-                if 'error' in r and 'avg_watts' not in r:
-                    return float('inf')
-                return r.get('adjusted_time', float('inf'))
+    # Assign places for adjusted time
+    adj_place_map = {}
+    for place, result in enumerate(all_results, 1):
+        adj_place_map[result['lineup_id']] = place
 
-            results.sort(key=sort_key)
+    # Also calculate raw time places
+    def raw_sort_key(r):
+        if 'error' in r and 'avg_watts' not in r:
+            return float('inf')
+        return r.get('raw_time', float('inf'))
 
-            # Create results dataframe
+    raw_sorted = sorted(all_results, key=raw_sort_key)
+    raw_place_map = {}
+    for place, result in enumerate(raw_sorted, 1):
+        raw_place_map[result['lineup_id']] = place
+
+    # Display inline analysis below each lineup column
+    if analysis_results:
+        analysis_cols = st.columns(3)
+
+        for idx, (lineup_id, col) in enumerate(zip(["A", "B", "C"], analysis_cols)):
+            with col:
+                if lineup_id in analysis_results:
+                    result = analysis_results[lineup_id]
+                    adj_place = adj_place_map.get(lineup_id, 0)
+                    raw_place = raw_place_map.get(lineup_id, 0)
+
+                    if 'error' in result and 'avg_watts' not in result:
+                        # Error state
+                        st.markdown(f"""
+                        <div class="analysis-card">
+                            <h4>Analysis Error</h4>
+                            <p style="color: #dc3545; font-size: 0.85rem;">{result.get('error', 'Unknown error')}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        # Get times - apply erg-to-water conversion if enabled
+                        raw_time = result['raw_time']
+                        adjusted_time = result['adjusted_time']
+                        split_500m = result['boat_split_500m']
+
+                        if erg_to_water:
+                            tech_eff = result.get('tech_efficiency', 1.05)
+                            dist_ratio = race_distance / target_distance
+                            raw_time = apply_erg_to_water(result['raw_time'], boat_class, tech_eff) * dist_ratio
+                            adjusted_time = apply_erg_to_water(result['adjusted_time'], boat_class, tech_eff) * dist_ratio
+                            split_500m = apply_erg_to_water(result['boat_split_500m'], boat_class, tech_eff)
+
+                        # Format values
+                        avg_age = result.get('avg_age', 0)
+                        masters_cat = get_masters_category(avg_age)
+                        port_w = f"{result['port_watts_total']:.0f}" if result.get('port_watts_total') else "-"
+                        stbd_w = f"{result['starboard_watts_total']:.0f}" if result.get('starboard_watts_total') else "-"
+                        pct_diff = f"{result['side_balance_pct']:.1f}%" if result.get('side_balance_pct') else "-"
+
+                        # Place badge classes and labels
+                        adj_place_class = f"place-{adj_place}" if adj_place <= 3 else ""
+                        adj_place_label = ["1st", "2nd", "3rd"][adj_place-1] if adj_place <= 3 else f"{adj_place}th"
+                        raw_place_class = f"place-{raw_place}" if raw_place <= 3 else ""
+                        raw_place_label = ["1st", "2nd", "3rd"][raw_place-1] if raw_place <= 3 else f"{raw_place}th"
+
+                        # Build the analysis card HTML
+                        st.markdown(f"""
+                        <div class="analysis-card">
+                            <span class="place-badge {raw_place_class}" style="margin-right: 0.25rem;">{raw_place_label} <span style="font-weight: 400; opacity: 0.8;">raw</span></span>
+                            <span class="place-badge {adj_place_class}">{adj_place_label} <span style="font-weight: 400; opacity: 0.8;">adj.</span></span>
+                            <div class="analysis-stat">
+                                <span class="stat-label">Split</span>
+                                <span class="stat-value">{format_split(split_500m)}</span>
+                            </div>
+                            <div class="analysis-stat">
+                                <span class="stat-label">Raw Time</span>
+                                <span class="stat-value">{format_time(raw_time)}</span>
+                            </div>
+                            <div class="analysis-stat">
+                                <span class="stat-label">Handicap</span>
+                                <span class="stat-value">-{result['handicap_seconds']:.1f}s</span>
+                            </div>
+                            <div class="analysis-stat">
+                                <span class="stat-label">Adjusted</span>
+                                <span class="stat-value" style="color: #28a745; font-weight: 700;">{format_time(adjusted_time)}</span>
+                            </div>
+                            <div class="analysis-stat">
+                                <span class="stat-label">Avg Watts</span>
+                                <span class="stat-value">{result['avg_watts']:.0f}W</span>
+                            </div>
+                            <div class="analysis-stat">
+                                <span class="stat-label">Port / Stbd</span>
+                                <span class="stat-value">{port_w} / {stbd_w} ({pct_diff})</span>
+                            </div>
+                            <div class="analysis-stat">
+                                <span class="stat-label">Age / Cat</span>
+                                <span class="stat-value">{avg_age:.1f} ({masters_cat})</span>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+        # Show erg-to-water indicator if enabled
+        if erg_to_water:
+            lineup_tech_effs = set(r.get('tech_efficiency', 1.05) for r in all_results)
+            tech_eff_value = list(lineup_tech_effs)[0] if len(lineup_tech_effs) == 1 else 1.05
+            tech_eff_str = f"{tech_eff_value:.2f}" if len(lineup_tech_effs) <= 1 else "varies"
+            boat_factor = get_boat_factor(boat_class)
+            caption = f"*On-Water Projection* | {boat_class} Factor: {boat_factor:.2f} | Tech Eff: {tech_eff_str}"
+            if race_distance != target_distance:
+                caption += f" | Race: {race_distance}m"
+            st.caption(caption)
+
+        # Detailed projections expander
+        with st.expander("View Detailed Projections"):
+            for result in all_results:
+                if 'projections' in result:
+                    st.markdown(f"**{result.get('lineup_display', result['lineup_id'])}**")
+                    proj_data = []
+                    proj_tech_eff = result.get('tech_efficiency', 1.05)
+
+                    for proj in result['projections']:
+                        if 'error' not in proj:
+                            src_dist = proj.get('source_distance', 0)
+                            src_str = f"{src_dist//1000}K" if src_dist >= 1000 else f"{src_dist}m"
+
+                            method = proj.get('projection_method', 'pauls_law')
+                            power_law_points = proj.get('power_law_points')
+                            if method == 'actual':
+                                method_str = "Actual"
+                            elif method == 'power_law' and power_law_points:
+                                def fmt_dist(d):
+                                    return f"{d//1000}K" if d >= 1000 else f"{d}m"
+                                dists = sorted([p[0] for p in power_law_points])
+                                method_str = f"Power({fmt_dist(dists[0])},{fmt_dist(dists[1])})"
+                            elif method == 'power_law':
+                                method_str = "Power"
+                            else:
+                                method_str = "Paul's"
+
+                            source_split = proj.get('source_split', 0)
+                            projected_split = proj.get('projected_split', 0)
+
+                            if erg_to_water and source_split > 0:
+                                source_split = apply_erg_to_water(source_split, boat_class, proj_tech_eff)
+                            if erg_to_water and projected_split > 0:
+                                projected_split = apply_erg_to_water(projected_split, boat_class, proj_tech_eff)
+
+                            proj_data.append({
+                                'Seat': proj.get('seat', '-'),
+                                'Side': proj.get('seat_side', '-'),
+                                'Rower': proj['rower'],
+                                'Age': proj.get('age', '-'),
+                                'Pref': proj.get('side', '-'),
+                                'Source': src_str,
+                                'Source Split': format_split(source_split),
+                                'Projected Split': format_split(projected_split),
+                                'Watts': f"{proj.get('projected_watts', 0):.0f}",
+                                'Method': method_str
+                            })
+                        else:
+                            proj_data.append({
+                                'Seat': proj.get('seat', '-'),
+                                'Side': '-',
+                                'Rower': proj['rower'],
+                                'Age': proj.get('age', '-'),
+                                'Pref': proj.get('side', '-'),
+                                'Source': '-',
+                                'Source Split': '-',
+                                'Projected Split': '-',
+                                'Watts': proj.get('error', 'Error'),
+                                'Method': '-'
+                            })
+
+                    if proj_data:
+                        st.table(pd.DataFrame(proj_data))
+
+        # Export options
+        st.divider()
+        export_col1, export_col2 = st.columns([1, 5])
+
+        with export_col1:
+            # Create summary dataframe for export
             table_data = []
-            for place, result in enumerate(results, 1):
+            for place, result in enumerate(all_results, 1):
                 if 'error' in result and 'avg_watts' not in result:
                     table_data.append({
                         'Place': '-',
@@ -6388,7 +6581,6 @@ Clear buttons at the top of each column reset that lineup.
                     stbd_w = f"{result['starboard_watts_total']:.0f}" if result.get('starboard_watts_total') else "-"
                     pct_diff = f"{result['side_balance_pct']:.1f}%" if result.get('side_balance_pct') else "-"
 
-                    # Get times - apply erg-to-water conversion if enabled
                     raw_time = result['raw_time']
                     adjusted_time = result['adjusted_time']
                     split_500m = result['boat_split_500m']
@@ -6396,13 +6588,10 @@ Clear buttons at the top of each column reset that lineup.
                     if erg_to_water:
                         tech_eff = result.get('tech_efficiency', 1.05)
                         dist_ratio = race_distance / target_distance
-
-                        # Apply erg-to-water conversion with distance ratio
                         raw_time = apply_erg_to_water(result['raw_time'], boat_class, tech_eff) * dist_ratio
                         adjusted_time = apply_erg_to_water(result['adjusted_time'], boat_class, tech_eff) * dist_ratio
                         split_500m = apply_erg_to_water(result['boat_split_500m'], boat_class, tech_eff)
 
-                    # Format age with masters category
                     avg_age = result.get('avg_age', 0)
                     masters_cat = get_masters_category(avg_age)
                     age_display = f"{avg_age:.1f} ({masters_cat})"
@@ -6423,207 +6612,30 @@ Clear buttons at the top of each column reset that lineup.
 
             df = pd.DataFrame(table_data)
 
-            # Show indicator when erg-to-water conversion is active
-            if erg_to_water:
-                # Check if lineups have different tech efficiencies
-                lineup_tech_effs = set(r.get('tech_efficiency', 1.05) for r in results)
-                tech_eff_value = list(lineup_tech_effs)[0] if len(lineup_tech_effs) == 1 else 1.05
-                tech_eff_str = f"{tech_eff_value:.2f}" if len(lineup_tech_effs) <= 1 else "varies"
-                boat_factor = get_boat_factor(boat_class)
-                caption = f"*On-Water Projection Mode* | {boat_class} Factor: {boat_factor:.2f} | Tech Eff: {tech_eff_str}"
-                if race_distance != target_distance:
-                    caption += f" | Race: {race_distance}m (from {target_distance}m)"
-                st.caption(caption)
+            # Excel download
+            excel_buffer = io.BytesIO()
+            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                df.to_excel(writer, sheet_name='Summary', index=False)
 
-            st.dataframe(df, use_container_width=True, hide_index=True)
-
-            # Show detailed projections for each lineup
-            with st.expander("View Detailed Projections"):
-                for result in results:
+                for result in all_results:
                     if 'projections' in result:
-                        st.markdown(f"**Lineup {result.get('lineup_display', result['lineup_id'])}**")
-                        proj_data = []
-
-                        proj_tech_eff = result.get('tech_efficiency', 1.05)
-
-                        for proj in result['projections']:
-                            if 'error' not in proj:
-                                # Format source distance - handle short distances
-                                src_dist = proj.get('source_distance', 0)
-                                if src_dist >= 1000:
-                                    src_str = f"{src_dist//1000}K"
-                                else:
-                                    src_str = f"{src_dist}m"
-
-                                # Format prediction method indicator
-                                method = proj.get('projection_method', 'pauls_law')
-                                power_law_points = proj.get('power_law_points')
-                                if method == 'actual':
-                                    method_str = "Actual"
-                                elif method == 'power_law' and power_law_points:
-                                    # Format the two distances used
-                                    def fmt_dist(d):
-                                        return f"{d//1000}K" if d >= 1000 else f"{d}m"
-                                    dists = sorted([p[0] for p in power_law_points])
-                                    method_str = f"Power({fmt_dist(dists[0])},{fmt_dist(dists[1])})"
-                                elif method == 'power_law':
-                                    method_str = "Power"
-                                else:
-                                    method_str = "Paul's"
-
-                                # Get splits - apply erg-to-water conversion if enabled
-                                source_split = proj.get('source_split', 0)
-                                projected_split = proj.get('projected_split', 0)
-
-                                if erg_to_water and source_split > 0:
-                                    source_split = apply_erg_to_water(source_split, boat_class, proj_tech_eff)
-                                if erg_to_water and projected_split > 0:
-                                    projected_split = apply_erg_to_water(projected_split, boat_class, proj_tech_eff)
-
-                                proj_data.append({
-                                    'Seat': proj.get('seat', '-'),
-                                    'Side': proj.get('seat_side', '-'),
-                                    'Rower': proj['rower'],
-                                    'Age': proj.get('age', '-'),
-                                    'Pref': proj.get('side', '-'),
-                                    'Source': src_str,
-                                    'Source Split': format_split(source_split),
-                                    'Projected Split': format_split(projected_split),
-                                    'Watts': f"{proj.get('projected_watts', 0):.0f}",
-                                    'Method': method_str
-                                })
-                            else:
-                                proj_data.append({
-                                    'Seat': proj.get('seat', '-'),
-                                    'Side': '-',
-                                    'Rower': proj['rower'],
-                                    'Age': proj.get('age', '-'),
-                                    'Pref': proj.get('side', '-'),
-                                    'Source': '-',
-                                    'Source Split': '-',
-                                    'Projected Split': '-',
-                                    'Watts': proj.get('error', 'Error'),
-                                    'Method': '-'
-                                })
-
-                        if proj_data:
-                            st.table(pd.DataFrame(proj_data))
-
-            # Export options
-            st.divider()
-            export_col1, export_col2 = st.columns([1, 5])
-
-            with export_col1:
-                # Excel download
-                excel_buffer = io.BytesIO()
-                with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                    # Summary sheet
-                    df.to_excel(writer, sheet_name='Summary', index=False)
-
-                    # Detailed projections for each lineup
-                    for result in results:
-                        if 'projections' in result:
-                            lineup_id = result['lineup_id']
-                            lineup_display = result.get('lineup_display', lineup_id)
-                            avg_age = result.get('avg_age', 0)
-
-                            export_tech_eff = result.get('tech_efficiency', 1.05)
-
-                            proj_rows = []
-                            for proj in result['projections']:
-                                if 'error' not in proj:
-                                    # Get splits - apply erg-to-water if enabled
-                                    source_split = proj.get('source_split', 0)
-                                    projected_split = proj.get('projected_split', 0)
-
-                                    if erg_to_water:
-                                        if source_split > 0:
-                                            source_split = apply_erg_to_water(source_split, boat_class, export_tech_eff)
-                                        if projected_split > 0:
-                                            projected_split = apply_erg_to_water(projected_split, boat_class, export_tech_eff)
-
-                                    # Format method string
-                                    method = proj.get('projection_method', 'pauls_law')
-                                    power_law_points = proj.get('power_law_points')
-                                    if method == 'actual':
-                                        method_str = "Actual"
-                                    elif method == 'power_law' and power_law_points:
-                                        def fmt_dist(d):
-                                            return f"{d//1000}K" if d >= 1000 else f"{d}m"
-                                        dists = sorted([p[0] for p in power_law_points])
-                                        method_str = f"Power({fmt_dist(dists[0])},{fmt_dist(dists[1])})"
-                                    elif method == 'power_law':
-                                        method_str = "Power"
-                                    else:
-                                        method_str = "Paul's"
-
-                                    proj_rows.append({
-                                        'Seat': proj.get('seat', '-'),
-                                        'Rower': proj['rower'],
-                                        'Age': proj.get('age', '-'),
-                                        'Source Split': format_split(source_split),
-                                        'Projected Split': format_split(projected_split),
-                                        'Watts': proj.get('projected_watts', 0),
-                                        'Method': method_str
-                                    })
-                            if proj_rows:
-                                # Create DataFrame with average age header
-                                proj_df = pd.DataFrame(proj_rows)
-                                # Add lineup name, average age, Masters category, and analysis settings as first row
-                                masters_cat = get_masters_category(avg_age)
-                                calc_display = "Watts" if calc_method == "watts" else "Split"
-                                pred_display = "Power Law" if pace_predictor == "power_law" else "Paul's Law"
-                                header_info = f'{lineup_display} | Avg Age: {avg_age:.1f} | Cat: {masters_cat} | Calc: {calc_display} | Pred: {pred_display}'
-                                if erg_to_water:
-                                    boat_factor = get_boat_factor(boat_class)
-                                    header_info += f' | On-Water ({boat_factor:.2f})'
-                                else:
-                                    header_info += ' | Erg (Raw)'
-                                header_df = pd.DataFrame([{'Seat': header_info, 'Rower': '', 'Age': '', 'Source Split': '', 'Projected Split': '', 'Watts': '', 'Method': ''}])
-                                combined_df = pd.concat([header_df, proj_df], ignore_index=True)
-                                combined_df.to_excel(
-                                    writer, sheet_name=f'Lineup {lineup_id}', index=False
-                                )
-
-                excel_buffer.seek(0)
-
-                # Copy to clipboard - create tab-separated text for easy pasting
-                # Add analysis settings header
-                calc_display = "Watts" if calc_method == "watts" else "Split"
-                pred_display = "Power Law" if pace_predictor == "power_law" else "Paul's Law"
-                header_line = f"LINEUP ANALYSIS | Calc: {calc_display} | Predictor: {pred_display}"
-                if erg_to_water:
-                    boat_factor = get_boat_factor(boat_class)
-                    header_line += f" | {boat_class} Factor: {boat_factor:.2f}"
-                else:
-                    header_line += " | Erg (Raw)"
-                clipboard_text = header_line + "\n\n" + df.to_csv(sep='\t', index=False)
-
-                # Add detailed projections
-                for result in results:
-                    if 'projections' in result:
+                        lineup_id = result['lineup_id']
+                        lineup_display = result.get('lineup_display', lineup_id)
                         avg_age = result.get('avg_age', 0)
-                        masters_cat = get_masters_category(avg_age)
-                        clip_tech_eff = result.get('tech_efficiency', 1.05)
-
-                        lineup_display = result.get('lineup_display', result['lineup_id'])
-                        header_info = f"{lineup_display} Details (Avg Age: {avg_age:.1f} | Cat: {masters_cat})"
-                        if erg_to_water:
-                            lineup_factor = get_boat_factor(boat_class)
-                            header_info += f" [On-Water: {lineup_factor:.2f} x {clip_tech_eff:.2f}]"
-                        else:
-                            header_info += " [Erg]"
-                        clipboard_text += f"\n\n{header_info}:\n"
+                        export_tech_eff = result.get('tech_efficiency', 1.05)
 
                         proj_rows = []
                         for proj in result['projections']:
                             if 'error' not in proj:
-                                # Get split - apply erg-to-water if enabled
+                                source_split = proj.get('source_split', 0)
                                 projected_split = proj.get('projected_split', 0)
-                                if erg_to_water and projected_split > 0:
-                                    projected_split = apply_erg_to_water(projected_split, boat_class, clip_tech_eff)
 
-                                # Format method string
+                                if erg_to_water:
+                                    if source_split > 0:
+                                        source_split = apply_erg_to_water(source_split, boat_class, export_tech_eff)
+                                    if projected_split > 0:
+                                        projected_split = apply_erg_to_water(projected_split, boat_class, export_tech_eff)
+
                                 method = proj.get('projection_method', 'pauls_law')
                                 power_law_points = proj.get('power_law_points')
                                 if method == 'actual':
@@ -6641,79 +6653,143 @@ Clear buttons at the top of each column reset that lineup.
                                 proj_rows.append({
                                     'Seat': proj.get('seat', '-'),
                                     'Rower': proj['rower'],
+                                    'Age': proj.get('age', '-'),
+                                    'Source Split': format_split(source_split),
                                     'Projected Split': format_split(projected_split),
-                                    'Watts': f"{proj.get('projected_watts', 0):.0f}",
+                                    'Watts': proj.get('projected_watts', 0),
                                     'Method': method_str
                                 })
+
                         if proj_rows:
-                            clipboard_text += pd.DataFrame(proj_rows).to_csv(sep='\t', index=False)
+                            proj_df = pd.DataFrame(proj_rows)
+                            masters_cat = get_masters_category(avg_age)
+                            calc_display = "Watts" if calc_method == "watts" else "Split"
+                            pred_display = "Power Law" if pace_predictor == "power_law" else "Paul's Law"
+                            header_info = f'{lineup_display} | Avg Age: {avg_age:.1f} | Cat: {masters_cat} | Calc: {calc_display} | Pred: {pred_display}'
+                            if erg_to_water:
+                                boat_factor = get_boat_factor(boat_class)
+                                header_info += f' | On-Water ({boat_factor:.2f})'
+                            else:
+                                header_info += ' | Erg (Raw)'
+                            header_df = pd.DataFrame([{'Seat': header_info, 'Rower': '', 'Age': '', 'Source Split': '', 'Projected Split': '', 'Watts': '', 'Method': ''}])
+                            combined_df = pd.concat([header_df, proj_df], ignore_index=True)
+                            combined_df.to_excel(writer, sheet_name=f'Lineup {lineup_id}', index=False)
 
-                # Encode text as base64 to avoid any escaping issues
-                b64_text = base64.b64encode(clipboard_text.encode('utf-8')).decode('ascii')
+            excel_buffer.seek(0)
 
-                # Copy to clipboard using components.html (executes JavaScript properly)
-                components.html(f"""
-                    <html>
-                    <head><style>
-                        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-                        html, body {{ height: 100%; overflow: hidden; margin: 0; padding: 0; }}
-                        body {{ padding-left: 2px; padding-right: 14px; }}
-                        button {{ display: block; width: 100%; }}
-                    </style></head>
-                    <body>
-                    <button id="copyBtn" data-text="{b64_text}" onclick="
-                        var text = atob(this.getAttribute('data-text'));
-                        navigator.clipboard.writeText(text).then(function() {{
-                            document.getElementById('copyBtn').innerText = 'Copied!';
-                            document.getElementById('copyBtn').style.background = '#28a745';
-                            document.getElementById('copyBtn').style.color = 'white';
-                            document.getElementById('copyBtn').style.borderColor = '#28a745';
-                            setTimeout(function() {{
-                                document.getElementById('copyBtn').innerText = 'Copy to Clipboard';
-                                document.getElementById('copyBtn').style.background = 'white';
-                                document.getElementById('copyBtn').style.color = 'rgb(49, 51, 63)';
-                                document.getElementById('copyBtn').style.borderColor = 'rgba(49, 51, 63, 0.2)';
-                            }}, 2000);
-                        }}).catch(function(err) {{
-                            document.getElementById('copyBtn').innerText = 'Failed';
-                            document.getElementById('copyBtn').style.background = '#dc3545';
-                        }});
-                    " style="
-                        padding: 0.25rem 0.75rem;
-                        height: 100%;
-                        font-family: 'Source Sans Pro', sans-serif;
-                        font-size: 16px;
-                        font-weight: 400;
-                        line-height: 1.6;
-                        cursor: pointer;
-                        border-radius: 8px;
-                        border: 1px solid rgba(49, 51, 63, 0.2);
-                        background-color: white;
-                        color: rgb(49, 51, 63);
-                    "
-                    onmouseover="this.style.borderColor='rgb(255, 75, 75)'; this.style.color='rgb(255, 75, 75)';"
-                    onmouseout="this.style.borderColor='rgba(49, 51, 63, 0.2)'; this.style.color='rgb(49, 51, 63)';"
-                    >Copy to Clipboard</button>
-                    </body>
-                    </html>
-                """, height=36, scrolling=False)
+            # Clipboard text
+            calc_display = "Watts" if calc_method == "watts" else "Split"
+            pred_display = "Power Law" if pace_predictor == "power_law" else "Paul's Law"
+            header_line = f"LINEUP ANALYSIS | Calc: {calc_display} | Predictor: {pred_display}"
+            if erg_to_water:
+                boat_factor = get_boat_factor(boat_class)
+                header_line += f" | {boat_class} Factor: {boat_factor:.2f}"
+            else:
+                header_line += " | Erg (Raw)"
+            clipboard_text = header_line + "\n\n" + df.to_csv(sep='\t', index=False)
 
-                # Update filename to indicate on-water mode
-                filename_suffix = "_onwater" if erg_to_water else ""
-                st.download_button(
-                    label="Download Excel",
-                    data=excel_buffer,
-                    file_name=f"lineup_analysis_{boat_class}_{target_distance}m{filename_suffix}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
+            for result in all_results:
+                if 'projections' in result:
+                    avg_age = result.get('avg_age', 0)
+                    masters_cat = get_masters_category(avg_age)
+                    clip_tech_eff = result.get('tech_efficiency', 1.05)
 
-        else:
-            # Only show this message if analysis wasn't skipped due to partial lineups
-            if not st.session_state.get('analysis_skipped', False):
-                st.info("No lineups to analyze. Add rowers to at least one lineup.")
-    else:
-        st.info("Click 'Analyze All Lineups' in the sidebar to see results.")
+                    lineup_display = result.get('lineup_display', result['lineup_id'])
+                    header_info = f"{lineup_display} Details (Avg Age: {avg_age:.1f} | Cat: {masters_cat})"
+                    if erg_to_water:
+                        lineup_factor = get_boat_factor(boat_class)
+                        header_info += f" [On-Water: {lineup_factor:.2f} x {clip_tech_eff:.2f}]"
+                    else:
+                        header_info += " [Erg]"
+                    clipboard_text += f"\n\n{header_info}:\n"
+
+                    proj_rows = []
+                    for proj in result['projections']:
+                        if 'error' not in proj:
+                            projected_split = proj.get('projected_split', 0)
+                            if erg_to_water and projected_split > 0:
+                                projected_split = apply_erg_to_water(projected_split, boat_class, clip_tech_eff)
+
+                            method = proj.get('projection_method', 'pauls_law')
+                            power_law_points = proj.get('power_law_points')
+                            if method == 'actual':
+                                method_str = "Actual"
+                            elif method == 'power_law' and power_law_points:
+                                def fmt_dist(d):
+                                    return f"{d//1000}K" if d >= 1000 else f"{d}m"
+                                dists = sorted([p[0] for p in power_law_points])
+                                method_str = f"Power({fmt_dist(dists[0])},{fmt_dist(dists[1])})"
+                            elif method == 'power_law':
+                                method_str = "Power"
+                            else:
+                                method_str = "Paul's"
+
+                            proj_rows.append({
+                                'Seat': proj.get('seat', '-'),
+                                'Rower': proj['rower'],
+                                'Projected Split': format_split(projected_split),
+                                'Watts': f"{proj.get('projected_watts', 0):.0f}",
+                                'Method': method_str
+                            })
+                    if proj_rows:
+                        clipboard_text += pd.DataFrame(proj_rows).to_csv(sep='\t', index=False)
+
+            b64_text = base64.b64encode(clipboard_text.encode('utf-8')).decode('ascii')
+
+            components.html(f"""
+                <html>
+                <head><style>
+                    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+                    html, body {{ height: 100%; overflow: hidden; margin: 0; padding: 0; }}
+                    body {{ padding-left: 2px; padding-right: 14px; }}
+                    button {{ display: block; width: 100%; }}
+                </style></head>
+                <body>
+                <button id="copyBtn" data-text="{b64_text}" onclick="
+                    var text = atob(this.getAttribute('data-text'));
+                    navigator.clipboard.writeText(text).then(function() {{
+                        document.getElementById('copyBtn').innerText = 'Copied!';
+                        document.getElementById('copyBtn').style.background = '#28a745';
+                        document.getElementById('copyBtn').style.color = 'white';
+                        document.getElementById('copyBtn').style.borderColor = '#28a745';
+                        setTimeout(function() {{
+                            document.getElementById('copyBtn').innerText = 'Copy to Clipboard';
+                            document.getElementById('copyBtn').style.background = 'white';
+                            document.getElementById('copyBtn').style.color = 'rgb(49, 51, 63)';
+                            document.getElementById('copyBtn').style.borderColor = 'rgba(49, 51, 63, 0.2)';
+                        }}, 2000);
+                    }}).catch(function(err) {{
+                        document.getElementById('copyBtn').innerText = 'Failed';
+                        document.getElementById('copyBtn').style.background = '#dc3545';
+                    }});
+                " style="
+                    padding: 0.25rem 0.75rem;
+                    height: 100%;
+                    font-family: 'Source Sans Pro', sans-serif;
+                    font-size: 16px;
+                    font-weight: 400;
+                    line-height: 1.6;
+                    cursor: pointer;
+                    border-radius: 8px;
+                    border: 1px solid rgba(49, 51, 63, 0.2);
+                    background-color: white;
+                    color: rgb(49, 51, 63);
+                "
+                onmouseover="this.style.borderColor='rgb(255, 75, 75)'; this.style.color='rgb(255, 75, 75)';"
+                onmouseout="this.style.borderColor='rgba(49, 51, 63, 0.2)'; this.style.color='rgb(49, 51, 63)';"
+                >Copy to Clipboard</button>
+                </body>
+                </html>
+            """, height=36, scrolling=False)
+
+            filename_suffix = "_onwater" if erg_to_water else ""
+            st.download_button(
+                label="Download Excel",
+                data=excel_buffer,
+                file_name=f"lineup_analysis_{boat_class}_{target_distance}m{filename_suffix}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
 
 
 if __name__ == "__main__":
