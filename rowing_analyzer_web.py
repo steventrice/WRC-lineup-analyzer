@@ -4497,12 +4497,20 @@ For coxed boats:
 These selections travel with the lineup when entered into events.
 """)
 
-        with st.expander("**5. Enter Into Events**", expanded=False):
+        with st.expander("**5. Analyze & Compare**", expanded=False):
             st.markdown("""
-- Eligible events appear in the Events panel (right side)
+- **Analysis is automatic** - fill all seats and results appear instantly
+- Each lineup shows raw and adjusted placement badges
+- Compare split times, watts, and port/starboard balance
+- View detailed projections in the expandable section below
+""")
+
+        with st.expander("**6. Enter Into Events**", expanded=False):
+            st.markdown("""
+- When a lineup is full and eligible, click **"Race This Lineup"**
+- Select the event from the popover menu
+- Entry saves automatically to Google Sheets
 - Events are filtered by gender, boat class, and age category
-- Click **"Enter into Event"** to register your lineup
-- The entry saves automatically to Google Sheets
 """)
 
         st.markdown("---")
