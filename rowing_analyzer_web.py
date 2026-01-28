@@ -3802,13 +3802,18 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                 border: 1px solid #ccc;
                 white-space: nowrap;
                 position: sticky;
-                top: 0;
                 z-index: 1;
+                text-align: center;
+            }
+            .minimap-table thead tr:first-child th {
+                top: 0;
+            }
+            .minimap-table thead tr:last-child th {
+                top: 18px;
             }
             .minimap-table th.corner {
                 position: sticky;
                 left: 0;
-                top: 0;
                 z-index: 2;
                 background-color: #f0f0f0;
             }
