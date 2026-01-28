@@ -4994,14 +4994,21 @@ Clear buttons at the top of each column reset that lineup.
                 key=f"regatta_select_{st.session_state.cache_version}"
             )
     else:
-        # Dashboard mode: just regatta dropdown
-        selected_regatta_display = st.selectbox(
-            "Regatta",
-            options=regatta_options_list,
-            index=default_index,
-            label_visibility="collapsed",
-            key=f"regatta_select_{st.session_state.cache_version}"
-        )
+        # Dashboard mode: regatta dropdown + reload button
+        dashboard_cols = st.columns([4, 1])
+        with dashboard_cols[0]:
+            selected_regatta_display = st.selectbox(
+                "Regatta",
+                options=regatta_options_list,
+                index=default_index,
+                label_visibility="collapsed",
+                key=f"regatta_select_{st.session_state.cache_version}"
+            )
+        with dashboard_cols[1]:
+            if st.button("Reload", type="secondary", use_container_width=True, help="Reload data from Google Sheets"):
+                st.session_state.cache_version += 1
+                st.session_state.event_entries = load_entries_from_gsheet()
+                st.rerun()
 
     # Store in session state for persistence across view toggles
     st.session_state.selected_regatta_display = selected_regatta_display
