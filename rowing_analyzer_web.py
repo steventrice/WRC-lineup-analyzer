@@ -4706,10 +4706,8 @@ def main():
         st.session_state.autofill_gender = "Men's"
     if 'autofill_target' not in st.session_state:
         st.session_state.autofill_target = "Lineup A"
-    if 'autofill_use_event_constraints' not in st.session_state:
-        st.session_state.autofill_use_event_constraints = False
-    if 'autofill_checked_events' not in st.session_state:
-        st.session_state.autofill_checked_events = set()
+    if 'autofill_selected_event' not in st.session_state:
+        st.session_state.autofill_selected_event = None  # None = Manual Mode, or event_number int
     if 'show_autofill_controls' not in st.session_state:
         st.session_state.show_autofill_controls = False
 
@@ -4793,9 +4791,9 @@ The app will adjust seat positions and split calculations automatically.
 
 **Autofill method:**
 - Expand the "Autofill" panel
-- Select gender and target lineup column
-- Click "Autofill" to find the fastest crew based on erg scores
-- Use "Raw" for pure speed or "Adjusted" for age-handicapped predictions
+- Select an event from the dropdown (auto-applies gender/age constraints), or use Manual Mode
+- Choose target lineup column (A, B, C, or All)
+- Click "Fill Fastest Raw" for pure speed, or "Fill For Category" to meet age requirements
 """)
 
         with st.expander("**4. Assign Cox & Boat**", expanded=False):
@@ -5053,13 +5051,15 @@ Clear buttons at the top of each column reset that lineup.
         st.session_state.locked_seats_b = set()
         st.session_state.locked_seats_c = set()
 
-    # Check for pending boat class change from Find Available Athletes
+    # Check for pending boat class change from event selection or Find Available Athletes
     if 'pending_boat_class' in st.session_state:
         new_boat = st.session_state.pending_boat_class
         st.session_state.selected_boat_class = new_boat
-        # Also set the widget's key directly so it updates
+        # Set the widget key directly so selectbox uses this value
         st.session_state.boat_class_select = new_boat
         del st.session_state.pending_boat_class
+        # Flag to skip syncing back from widget (prevents overwriting our change)
+        st.session_state._skip_boat_class_sync = True
 
     # Check for pending club boat assignment from Edit Entry
     if 'pending_boat_a' in st.session_state:
@@ -5075,18 +5075,20 @@ Clear buttons at the top of each column reset that lineup.
     # Lineup mode: show boat selection and action buttons
     if st.session_state.view_mode == 'lineup':
         with control_cols[2]:
-            # Get the index for the current boat class
-            current_boat_value = st.session_state.get('selected_boat_class', '4+')
-            boat_index = boat_options_list.index(current_boat_value) if current_boat_value in boat_options_list else 4
+            # Initialize widget key if not set
+            if 'boat_class_select' not in st.session_state:
+                st.session_state.boat_class_select = st.session_state.get('selected_boat_class', '4+')
             boat_class = st.selectbox(
                 "Boat",
                 options=boat_options_list,
-                index=boat_index,
                 key="boat_class_select",
                 label_visibility="collapsed"
             )
-            # Sync back to session state
-            st.session_state.selected_boat_class = boat_class
+            # Sync back to session state (skip if we just applied a pending change)
+            if st.session_state.get('_skip_boat_class_sync'):
+                del st.session_state._skip_boat_class_sync
+            else:
+                st.session_state.selected_boat_class = boat_class
 
         with control_cols[3]:
             if st.button("Clear All", type="secondary", use_container_width=True):
@@ -5152,13 +5154,6 @@ Clear buttons at the top of each column reset that lineup.
                 st.rerun()
             return
 
-        # Filter checkbox
-        show_targeted_only = st.checkbox("Targeted Only", value=True, key="targeted_events_filter_dialog")
-
-        # Filter if checkbox checked
-        if show_targeted_only:
-            events = [e for e in events if e.include]
-
         # Helper to normalize day strings for comparison (remove leading zeros)
         def normalize_day(day_str: str) -> str:
             """Normalize day string: 'Sunday, March 08, 2026' -> 'sunday, march 8, 2026'"""
@@ -5199,129 +5194,157 @@ Clear buttons at the top of each column reset that lineup.
             boat = entry.get('boat', '')
             return not boat or boat.strip() == ''
 
-        # Display event list with entry indicators and autofill checkboxes
-        for event in events:
-            priority_marker = "⭐ " if event.priority else ""
+        # Filter and summary in header
+        header_cols = st.columns([1, 1])
+        with header_cols[0]:
+            show_targeted_only = st.checkbox("Targeted Only", value=True, key="targeted_events_filter_dialog")
 
-            # Check for entries in this event
-            event_entries = [e for e in st.session_state.event_entries
-                            if entry_matches_event(e, event)]
+        if show_targeted_only:
+            display_events = [e for e in events if e.include]
+        else:
+            display_events = events
 
-            # Build event label
-            event_time_str = format_event_time(event.event_time)
-
+        # Count summaries
+        events_with_entries = 0
+        total_entries = 0
+        for event in display_events:
+            event_entries = [e for e in st.session_state.event_entries if entry_matches_event(e, event)]
             if event_entries:
-                # Show event with entry count as expander
-                entry_count = len(event_entries)
-                # Check if any entry is missing cox or boat
-                any_missing_cox = any(is_missing_cox(e) for e in event_entries)
-                any_missing_boat = any(is_missing_boat(e) for e in event_entries)
-                cox_warning = "📣 " if any_missing_cox else ""
-                boat_warning = "🚣 " if any_missing_boat else ""
+                events_with_entries += 1
+                total_entries += len(event_entries)
 
-                # Checkbox for autofill (inline before expander)
-                is_checked = event.event_number in st.session_state.autofill_checked_events
-                chk_col, exp_col = st.columns([0.08, 0.92], gap="small")
-                with chk_col:
-                    event_check = st.checkbox("", value=is_checked,
-                                               key=f"dialog_autofill_event_check_{event.event_number}")
-                with exp_col:
-                    with st.expander(f"{event_time_str} {priority_marker}{cox_warning}{boat_warning}{event.event_name} [{entry_count}]"):
-                        for entry_idx, entry in enumerate(event_entries):
-                            avg_age_display = entry.get('avg_age', '-')
-                            # Show warnings if this entry is missing cox or boat
-                            entry_warnings = []
-                            if is_missing_cox(entry):
-                                entry_warnings.append("📣 Needs Cox")
-                            if is_missing_boat(entry):
-                                entry_warnings.append("🚣 Needs Boat")
-                            warning_str = " ".join(entry_warnings)
-                            boat_display = f" | Boat: {entry.get('boat')}" if entry.get('boat') else ""
-                            st.markdown(f"**Entry {entry['entry_number']}** - {entry['boat_class']} {entry['category']} (Avg: {avg_age_display}){boat_display} {warning_str}")
-                            # Show rowers
-                            rower_list = ", ".join(entry['rowers'])
-                            st.caption(rower_list)
-                            # Edit and Remove buttons
-                            btn_cols = st.columns(2)
-                            with btn_cols[0]:
-                                if st.button("✏️ Edit", key=f"dialog_edit_{event.event_number}_{entry['entry_number']}_{entry_idx}", help="Edit in Lineup A"):
-                                    # Load entry into Lineup A for editing
-                                    entry_boat = entry.get('boat_class', '4+')
-                                    entry_rowers = entry.get('rowers', [])
-                                    is_coxed = '+' in entry_boat
+        with header_cols[1]:
+            st.caption(f"{events_with_entries}/{len(display_events)} events · {total_entries} entries")
 
-                                    # Use pending flag for boat class (will be processed before widget renders on rerun)
-                                    st.session_state.pending_boat_class = entry_boat
+        # CSS for compact table styling
+        st.markdown("""
+        <style>
+        .event-row { border-bottom: 1px solid #333; padding: 4px 0; }
+        .event-row:hover { background: rgba(255,255,255,0.03); }
+        .lineup-text { font-size: 12px; color: #aaa; }
+        .empty-row { opacity: 0.5; }
+        </style>
+        """, unsafe_allow_html=True)
 
-                                    # For coxed boats, last rower is cox
-                                    boat_seats = {'1x': 1, '2x': 2, '2-': 2, '4x': 4, '4+': 4, '4-': 4, '8+': 8}
-                                    expected_seats = boat_seats.get(entry_boat, 4)
+        # Table header - even tighter columns
+        hdr = st.columns([0.8, 1, 1.8, 5.2, 0.7])
+        with hdr[0]:
+            st.caption("Autofill")
+        with hdr[1]:
+            st.caption("Time")
+        with hdr[2]:
+            st.caption("Event")
+        with hdr[3]:
+            st.caption("Lineup")
+        with hdr[4]:
+            st.caption("")
+        st.markdown("<hr style='margin: 0; border-color: #444;'>", unsafe_allow_html=True)
 
-                                    if is_coxed and entry_rowers:
-                                        if len(entry_rowers) > expected_seats:
-                                            # Has cox - split rowers and cox
-                                            seat_rowers = entry_rowers[:expected_seats]
-                                            cox = entry_rowers[expected_seats]
-                                        else:
-                                            # No cox assigned
-                                            seat_rowers = entry_rowers
-                                            cox = None
-                                        st.session_state.lineup_a = seat_rowers + [None] * (expected_seats - len(seat_rowers))
-                                        st.session_state.cox_a = cox
+        # Event rows
+        for event in display_events:
+            event_entries = [e for e in st.session_state.event_entries if entry_matches_event(e, event)]
+            entry_count = len(event_entries)
+            is_selected = st.session_state.autofill_selected_event == event.event_number
+
+            priority = "⭐" if event.priority else ""
+            is_empty = entry_count == 0
+            dim = "opacity: 0.4;" if is_empty else ""
+
+            # Row with gridline - even tighter columns
+            cols = st.columns([0.8, 1, 1.8, 5.2, 0.7])
+
+            with cols[0]:
+                btn_label = "✓" if is_selected else "⚡"
+                if st.button(btn_label, key=f"sel_{event.event_number}", help="Select for autofill"):
+                    if is_selected:
+                        st.session_state.autofill_selected_event = None
+                    else:
+                        st.session_state.autofill_selected_event = event.event_number
+                        event_boat = parse_event_boat_class(event.event_name)
+                        if event_boat and event_boat != st.session_state.get('selected_boat_class'):
+                            st.session_state.pending_boat_class = event_boat
+                    st.rerun()
+
+            with cols[1]:
+                st.markdown(f"<span style='{dim} font-size:13px;'>{format_event_time(event.event_time)}</span>", unsafe_allow_html=True)
+
+            with cols[2]:
+                st.markdown(f"<span style='{dim} font-size:13px;'>{priority} {event.event_name}</span>", unsafe_allow_html=True)
+
+            with cols[3]:
+                if is_empty:
+                    st.markdown(f"<span style='{dim} font-size:12px;'>—</span>", unsafe_allow_html=True)
+                else:
+                    # Show each entry's lineup
+                    for idx, entry in enumerate(event_entries):
+                        warnings = ""
+                        if is_missing_cox(entry):
+                            warnings += "📣"
+                        if is_missing_boat(entry):
+                            warnings += "🚣"
+                        rowers = entry.get('rowers', [])
+                        boat_class = entry.get('boat_class', '')
+                        is_coxed = '+' in boat_class
+                        boat_seats = {'1x': 1, '2x': 2, '2-': 2, '4x': 4, '4+': 4, '4-': 4, '8+': 8}
+                        expected_seats = boat_seats.get(boat_class, 4)
+
+                        # Format rowers with cox first in parens if coxed boat
+                        if is_coxed and len(rowers) > expected_seats:
+                            cox = rowers[expected_seats]
+                            seat_rowers = rowers[:expected_seats]
+                            rower_str = f"({cox}), " + ", ".join(seat_rowers)
+                        else:
+                            rower_str = ", ".join(rowers)
+
+                        cat = entry.get('category', '').split()[-1] if entry.get('category') else ''
+                        age = entry.get('avg_age', '')
+                        boat_name = entry.get('boat', '')
+                        line = f"{warnings}{cat}({age}): {rower_str}"
+                        if boat_name:
+                            line += f" [{boat_name}]"
+                        st.markdown(f"<span style='font-size:11px;'>{line}</span>", unsafe_allow_html=True)
+
+            with cols[4]:
+                if not is_empty:
+                    # Edit/delete using popover for each entry
+                    for idx, entry in enumerate(event_entries):
+                        with st.popover("···"):
+                            if st.button("✏️ Edit", key=f"edit_{event.event_number}_{idx}", use_container_width=True):
+                                entry_boat = entry.get('boat_class', '4+')
+                                entry_rowers = entry.get('rowers', [])
+                                is_coxed_btn = '+' in entry_boat
+                                st.session_state.pending_boat_class = entry_boat
+                                boat_seats_btn = {'1x': 1, '2x': 2, '2-': 2, '4x': 4, '4+': 4, '4-': 4, '8+': 8}
+                                expected_seats_btn = boat_seats_btn.get(entry_boat, 4)
+                                if is_coxed_btn and entry_rowers:
+                                    if len(entry_rowers) > expected_seats_btn:
+                                        st.session_state.lineup_a = entry_rowers[:expected_seats_btn]
+                                        st.session_state.cox_a = entry_rowers[expected_seats_btn]
                                     else:
-                                        # Non-coxed boat
-                                        st.session_state.lineup_a = entry_rowers + [None] * (expected_seats - len(entry_rowers))
+                                        st.session_state.lineup_a = entry_rowers + [None] * (expected_seats_btn - len(entry_rowers))
                                         st.session_state.cox_a = None
+                                else:
+                                    st.session_state.lineup_a = entry_rowers + [None] * (expected_seats_btn - len(entry_rowers))
+                                    st.session_state.cox_a = None
+                                st.session_state.pending_boat_a = entry.get('boat', None)
+                                st.session_state.editing_entry = entry.copy()
+                                st.session_state.editing_event = event
+                                st.session_state.view_mode = 'lineup'
+                                st.toast(f"Editing entry for {event.event_name}")
+                                st.rerun()
+                            if st.button("🗑️ Delete", key=f"del_{event.event_number}_{idx}", use_container_width=True):
+                                if delete_entry_from_gsheet(entry):
+                                    st.toast("Entry removed")
+                                st.session_state.event_entries.remove(entry)
+                                editing = st.session_state.get('editing_entry')
+                                if editing and editing.get('entry_number') == entry.get('entry_number'):
+                                    del st.session_state['editing_entry']
+                                    if 'editing_event' in st.session_state:
+                                        del st.session_state['editing_event']
+                                st.rerun()
 
-                                    # Restore club boat assignment (use pending flag for widget sync)
-                                    st.session_state.pending_boat_a = entry.get('boat', None)
-
-                                    # Store original entry for edit mode
-                                    st.session_state.editing_entry = entry.copy()
-                                    st.session_state.editing_event = event
-
-                                    # Switch to lineup view
-                                    st.session_state.view_mode = 'lineup'
-                                    st.toast(f"Editing Entry {entry['entry_number']} for {event.event_name}")
-                                    st.rerun()
-                            with btn_cols[1]:
-                                if st.button("🗑️ Remove", key=f"dialog_remove_{event.event_number}_{entry['entry_number']}_{entry_idx}", help="Remove entry"):
-                                    # Delete from Google Sheets
-                                    if delete_entry_from_gsheet(entry):
-                                        st.toast("Entry removed from Google Sheets")
-                                    st.session_state.event_entries.remove(entry)
-                                    # Clear edit mode if we just deleted the entry being edited
-                                    editing = st.session_state.get('editing_entry')
-                                    if editing and editing.get('entry_number') == entry.get('entry_number') and editing.get('event_number') == entry.get('event_number'):
-                                        del st.session_state['editing_entry']
-                                        if 'editing_event' in st.session_state:
-                                            del st.session_state['editing_event']
-                                    st.rerun()
-
-                # Handle checkbox state change (for events with entries)
-                if event_check and event.event_number not in st.session_state.autofill_checked_events:
-                    st.session_state.autofill_checked_events.add(event.event_number)
-                    st.rerun()
-                elif not event_check and event.event_number in st.session_state.autofill_checked_events:
-                    st.session_state.autofill_checked_events.discard(event.event_number)
-                    st.rerun()
-
-            else:
-                # No entries - show checkbox with event name inline
-                is_checked = event.event_number in st.session_state.autofill_checked_events
-                event_label = f"{event_time_str} {priority_marker}{event.event_name}"
-                event_check = st.checkbox(
-                    event_label,
-                    value=is_checked,
-                    key=f"dialog_autofill_event_check_{event.event_number}",
-                )
-                # Handle checkbox state change
-                if event_check and event.event_number not in st.session_state.autofill_checked_events:
-                    st.session_state.autofill_checked_events.add(event.event_number)
-                    st.rerun()
-                elif not event_check and event.event_number in st.session_state.autofill_checked_events:
-                    st.session_state.autofill_checked_events.discard(event.event_number)
-                    st.rerun()
+            # Gridline after each row
+            st.markdown("<hr style='margin: 2px 0; border-color: #333; border-width: 0.5px;'>", unsafe_allow_html=True)
 
         # Export button at bottom of event panel
         if st.session_state.event_entries:
@@ -5413,16 +5436,44 @@ Clear buttons at the top of each column reset that lineup.
         num_rowing_seats = boat_seats.get(boat_class, 4)
 
         with st.expander("⚡ Autofill Lineup", expanded=False):
-            autofill_cols = st.columns([2, 2, 2, 2, 2, 2])
+            # Build event dropdown options
+            events = roster_manager.regatta_events.get(selected_regatta, [])
+            event_options = {"-- Manual Mode --": None}  # None = manual mode
+            for event in events:
+                if event.include:  # Only targeted events
+                    event_time_str = format_event_time(event.event_time)
+                    event_label = f"{event_time_str} - {event.event_name}"
+                    event_options[event_label] = event.event_number
+
+            # Find current selection's label
+            current_event_label = "-- Manual Mode --"
+            for label, evt_num in event_options.items():
+                if evt_num == st.session_state.autofill_selected_event:
+                    current_event_label = label
+                    break
+
+            autofill_cols = st.columns([3, 2, 2, 2, 2])
 
             with autofill_cols[0]:
-                autofill_gender = st.selectbox(
-                    "Gender",
-                    options=["Men's", "Women's", "Mixed"],
-                    index=["Men's", "Women's", "Mixed"].index(st.session_state.autofill_gender),
-                    key="autofill_gender_select"
+                selected_event_label = st.selectbox(
+                    "Event",
+                    options=list(event_options.keys()),
+                    index=list(event_options.keys()).index(current_event_label),
+                    key="autofill_event_select",
+                    help="Select an event to auto-apply constraints, or Manual Mode for custom settings"
                 )
-                st.session_state.autofill_gender = autofill_gender
+                new_event_number = event_options[selected_event_label]
+                if new_event_number != st.session_state.autofill_selected_event:
+                    st.session_state.autofill_selected_event = new_event_number
+                    # Auto-update boat class if event selected
+                    if new_event_number is not None:
+                        for event in events:
+                            if event.event_number == new_event_number:
+                                event_boat = parse_event_boat_class(event.event_name)
+                                if event_boat and event_boat != boat_class:
+                                    st.session_state.pending_boat_class = event_boat
+                                break
+                    st.rerun()
 
             with autofill_cols[1]:
                 autofill_target = st.selectbox(
@@ -5433,95 +5484,75 @@ Clear buttons at the top of each column reset that lineup.
                 )
                 st.session_state.autofill_target = autofill_target
 
-            with autofill_cols[2]:
-                autofill_use_constraints = st.checkbox(
-                    "Use Event Constraints",
-                    value=st.session_state.autofill_use_event_constraints,
-                    key="autofill_use_constraints_cb",
-                    help="When checked, applies gender/age constraints from checked events"
-                )
-                st.session_state.autofill_use_event_constraints = autofill_use_constraints
-
-            # Compute constraints from checked events
+            # Compute constraints from selected event
             autofill_min_avg_age = 0
-            autofill_gender_constraint = autofill_gender
-            autofill_boat_constraint = None
-            constraint_warning = None
+            autofill_gender_constraint = st.session_state.autofill_gender
+            is_event_mode = st.session_state.autofill_selected_event is not None
 
-            if autofill_use_constraints and st.session_state.autofill_checked_events:
-                checked_genders = set()
-                max_min_age = 0
-                checked_boats = set()
-
-                events = roster_manager.regatta_events.get(selected_regatta, [])
+            if is_event_mode:
+                # Find the selected event and extract constraints
                 for event in events:
-                    if event.event_number in st.session_state.autofill_checked_events:
+                    if event.event_number == st.session_state.autofill_selected_event:
                         event_gender = parse_event_gender(event.event_name)
-                        event_boat = parse_event_boat_class(event.event_name)
                         event_category = parse_event_category(event.event_name)
 
                         if event_gender:
-                            checked_genders.add(event_gender)
-                        if event_boat:
-                            checked_boats.add(event_boat)
+                            if event_gender == 'M':
+                                autofill_gender_constraint = "Men's"
+                            elif event_gender == 'W':
+                                autofill_gender_constraint = "Women's"
+                            elif event_gender == 'Mix':
+                                autofill_gender_constraint = "Mixed"
+
                         if event_category:
-                            min_age = get_category_min_age(event_category)
-                            max_min_age = max(max_min_age, min_age)
+                            autofill_min_avg_age = get_category_min_age(event_category)
 
-                # Determine effective gender constraint
-                if checked_genders:
-                    if len(checked_genders) == 1:
-                        gender_code = list(checked_genders)[0]
-                        if gender_code == 'M':
-                            autofill_gender_constraint = "Men's"
-                        elif gender_code == 'W':
-                            autofill_gender_constraint = "Women's"
-                        elif gender_code == 'Mix':
-                            autofill_gender_constraint = "Mixed"
-                    else:
-                        # Multiple genders checked - require mixed
-                        autofill_gender_constraint = "Mixed"
+                        break
 
-                autofill_min_avg_age = max_min_age
-                # Store in session state so it's available when button is clicked
+                # Store computed min age for button handler
                 st.session_state.autofill_computed_min_age = autofill_min_avg_age
 
-                # Check for conflicting boat classes
-                if len(checked_boats) > 1:
-                    constraint_warning = f"Warning: Checked events have different boat classes: {', '.join(checked_boats)}"
-                elif len(checked_boats) == 1:
-                    autofill_boat_constraint = list(checked_boats)[0]
-                    if autofill_boat_constraint != boat_class:
-                        constraint_warning = f"Warning: Event boat class ({autofill_boat_constraint}) differs from selected ({boat_class})"
-
-            # Show constraint info
-            if autofill_use_constraints:
-                with autofill_cols[3]:
-                    if st.session_state.autofill_checked_events:
-                        constraint_info = f"{autofill_gender_constraint}"
-                        if autofill_min_avg_age > 0:
-                            constraint_info += f", Age≥{autofill_min_avg_age}"
-                        st.caption(f"Constraints: {constraint_info}")
-                    else:
-                        st.caption("No events checked")
-
-            # Autofill buttons
-            with autofill_cols[4]:
-                autofill_raw_clicked = st.button("⚡ Autofill Raw", use_container_width=True,
-                                                  help="Find fastest lineup by raw erg time")
-
-            with autofill_cols[5]:
-                # Button label and behavior changes based on whether event constraints are active
-                if autofill_use_constraints and autofill_min_avg_age > 0:
-                    autofill_adj_clicked = st.button("⚡ Autofill Category", use_container_width=True,
-                                                      help=f"Find fastest lineup meeting category min age ({autofill_min_avg_age})")
+            with autofill_cols[2]:
+                if is_event_mode:
+                    # Show constraints extracted from event
+                    constraint_parts = [autofill_gender_constraint]
+                    event_boat = None
+                    for event in events:
+                        if event.event_number == st.session_state.autofill_selected_event:
+                            event_boat = parse_event_boat_class(event.event_name)
+                            break
+                    if event_boat:
+                        constraint_parts.append(event_boat)
+                    if autofill_min_avg_age > 0:
+                        constraint_parts.append(f"Age≥{autofill_min_avg_age}")
+                    st.text_input("Constraints", value=", ".join(constraint_parts), disabled=True,
+                                  label_visibility="visible")
                 else:
-                    autofill_adj_clicked = st.button("⚡ Autofill Adj.", use_container_width=True,
-                                                      help="Find fastest lineup by handicap-adjusted time")
+                    # Manual mode - show gender selector
+                    autofill_gender = st.selectbox(
+                        "Gender",
+                        options=["Men's", "Women's", "Mixed"],
+                        index=["Men's", "Women's", "Mixed"].index(st.session_state.autofill_gender),
+                        key="autofill_gender_select"
+                    )
+                    st.session_state.autofill_gender = autofill_gender
+                    autofill_gender_constraint = autofill_gender
 
-            # Show constraint warning
-            if constraint_warning:
-                st.warning(constraint_warning)
+            # Autofill buttons - add spacing to align with other controls
+            with autofill_cols[3]:
+                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                autofill_raw_clicked = st.button("⚡ Fill Fastest Raw", use_container_width=True,
+                                                  help="Find fastest lineup by raw erg time (ignores age)")
+
+            with autofill_cols[4]:
+                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                # Button label changes based on mode
+                if is_event_mode and autofill_min_avg_age > 0:
+                    autofill_adj_clicked = st.button("⚡ Fill For Category", use_container_width=True,
+                                                      help=f"Find fastest lineup meeting age requirement (≥{autofill_min_avg_age})")
+                else:
+                    autofill_adj_clicked = st.button("⚡ Fill Fastest Adj", use_container_width=True,
+                                                      help="Find fastest lineup by handicap-adjusted time")
 
             # Toggle for showing lock/exclude controls
             st.session_state.show_autofill_controls = st.checkbox(
@@ -5539,16 +5570,16 @@ Clear buttons at the top of each column reset that lineup.
             # Determine optimization mode
             if autofill_raw_clicked:
                 optimize_for = 'raw'
-            elif autofill_use_constraints and effective_min_avg_age > 0:
-                # With event constraints, optimize for fastest raw time that meets category
+            elif is_event_mode and effective_min_avg_age > 0:
+                # With event selected, optimize for fastest raw time that meets category
                 optimize_for = 'category'
             else:
                 optimize_for = 'adjusted'
 
             num_lineups = 3 if autofill_target == "All (Top 3)" else 1
 
-            # Get effective constraints
-            effective_gender = autofill_gender_constraint if autofill_use_constraints else autofill_gender
+            # Get effective constraints (always use autofill_gender_constraint - it's set correctly in both modes)
+            effective_gender = autofill_gender_constraint
 
             # Helper to get locked rowers dict for a lineup slot
             def get_locked_rowers_for_slot(slot: str) -> dict:
@@ -6542,17 +6573,17 @@ Clear buttons at the top of each column reset that lineup.
                         if is_lineup_eligible_for_event(lineup_gender, avg_age, boat_class, event):
                             eligible_events.append(event)
 
-                    # Prioritize: 1) Events checked for autofill, 2) Targeted events, 3) Other eligible
+                    # Prioritize: 1) Selected autofill event, 2) Targeted events, 3) Other eligible
                     targeted_filter = st.session_state.get("targeted_events_filter_dialog", True)
-                    autofill_checked = st.session_state.get('autofill_checked_events', set())
+                    autofill_selected = st.session_state.get('autofill_selected_event', None)
 
-                    checked_events = [e for e in eligible_events if e.event_number in autofill_checked]
+                    selected_events = [e for e in eligible_events if e.event_number == autofill_selected]
                     if targeted_filter:
-                        other_events = [e for e in eligible_events if e.include and e.event_number not in autofill_checked]
+                        other_events = [e for e in eligible_events if e.include and e.event_number != autofill_selected]
                     else:
-                        other_events = [e for e in eligible_events if e.event_number not in autofill_checked]
+                        other_events = [e for e in eligible_events if e.event_number != autofill_selected]
 
-                    events_to_show = checked_events + other_events
+                    events_to_show = selected_events + other_events
 
                     if events_to_show:
                         # Check if this lineup is already entered in any eligible event
