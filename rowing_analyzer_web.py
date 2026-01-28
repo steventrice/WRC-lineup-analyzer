@@ -5051,10 +5051,25 @@ Clear buttons at the top of each column reset that lineup.
                 regatta_options[display_name] = key
 
     # Add remaining signup sheet regattas (skip ones with events coverage)
+    # Use regatta_all_cols to add day-specific options for multi-day regattas
     for col in roster_manager.regattas:
         if col not in regattas_with_events:
             display = roster_manager.regatta_display_names.get(col, col)
-            regatta_options[display] = col
+            # Check if this regatta has day-specific columns
+            if hasattr(roster_manager, 'regatta_all_cols') and display in roster_manager.regatta_all_cols:
+                day_cols = roster_manager.regatta_all_cols[display]
+                days_with_names = [(c, d) for c, d in day_cols if d is not None]
+                if len(days_with_names) > 1:
+                    # Multi-day regatta - add day-specific options
+                    for signup_col, day_name in days_with_names:
+                        display_name = f"{display} - {day_name}"
+                        # Key format matches what filtering expects: "DisplayName|DayName"
+                        regatta_options[display_name] = f"{display}|{day_name}"
+                else:
+                    # Single day or no day columns - just add the base regatta
+                    regatta_options[display] = col
+            else:
+                regatta_options[display] = col
 
     # Get default index from session state
     regatta_options_list = list(regatta_options.keys())
@@ -5951,6 +5966,8 @@ Clear buttons at the top of each column reset that lineup.
             # Extract just the day of week from day_part (e.g., "Friday, June 20, 2025" -> "Friday")
             if day_part:
                 day_part = day_part.split(",")[0].split()[0].strip()
+
+
 
             # Try exact match first, then partial match for events tab regattas
             def is_attending_regatta(rower, regatta_name, day_name=None):
