@@ -3706,7 +3706,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
     boats_with_hot_seats = sum(1 for b in boat_colors if any(c in ['🟠', '🔴'] for c in boat_colors[b].values()))
     conflicts = sum(1 for a in athlete_events for e in athlete_events[a].values() if len(e) > 1)
     needs_cox_count = sum(1 for entry in dashboard_entries if '+' in entry.get('boat_class', '') and len(entry.get('rowers', [])) < {'4+': 5, '8+': 9}.get(entry.get('boat_class', ''), 0))
-    needs_boat_count = sum(1 for entry in dashboard_entries if not entry.get('boat', '').strip())
+    needs_boat_count = sum(1 for entry in dashboard_entries if not str(entry.get('boat', '') or '').strip())
 
     # Display summary
     st.subheader(f"📊 {regatta_name}")
