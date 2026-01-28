@@ -3899,6 +3899,13 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
             <thead><tr><th class="corner"></th>
         """
 
+        # Add time row first
+        for event in sorted_events:
+            time_str = format_event_time_func(event['time']) if event['time'] else ""
+            minimap_html += f'<th style="font-size: 9px; color: #666;">{time_str}</th>'
+
+        minimap_html += "</tr><tr><th class='corner'></th>"
+
         # Add event headers (shorthand)
         for event in sorted_events:
             shorthand = get_event_shorthand(event['name'])
