@@ -6368,7 +6368,11 @@ Clear buttons at the top of each column reset that lineup.
                 # Add lock icon prefix when locked (only if controls are visible)
                 lock_prefix = "🔒 " if (is_locked and show_lock_controls) else ""
                 if rower_name:
-                    btn_label = f"{label}: {lock_prefix}{rower_name}"
+                    # Get side preference from roster
+                    rower_obj = roster_manager.get_rower(rower_name)
+                    side_pref = rower_obj.side_preference_str() if rower_obj else ""
+                    side_suffix = f" ({side_pref})" if side_pref and side_pref != '-' else ""
+                    btn_label = f"{label}: {lock_prefix}{rower_name}{side_suffix}"
                 else:
                     btn_label = f"{label}: ..."
 
