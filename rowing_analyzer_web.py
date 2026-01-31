@@ -2810,10 +2810,11 @@ class LineupOptimizer:
                 debug_counts['age_rejected'] = debug_counts.get('age_rejected', 0) + 1
             return None
 
-        # Check mixed gender requirement
+        # Check mixed gender requirement - must have equal men and women
         if gender == "Mixed":
-            genders = set(r.gender for r in rowers)
-            if 'M' not in genders or 'F' not in genders:
+            men_count = sum(1 for r in rowers if r.gender == 'M')
+            women_count = sum(1 for r in rowers if r.gender == 'F')
+            if men_count != women_count:
                 if debug_counts is not None:
                     debug_counts['gender_rejected'] = debug_counts.get('gender_rejected', 0) + 1
                 return None
