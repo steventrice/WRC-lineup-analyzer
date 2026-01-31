@@ -6823,12 +6823,13 @@ Clear buttons at the top of each column reset that lineup.
         border-bottom: none;
     }
     .stat-label {
-        color: rgba(49, 51, 63, 0.7);
+        color: rgba(49, 51, 63, 0.85);
         font-size: 0.85rem;
     }
     .stat-value {
         font-weight: 600;
         font-size: 0.85rem;
+        color: rgb(49, 51, 63);
     }
     .place-badge {
         display: inline-block;
@@ -6967,8 +6968,8 @@ Clear buttons at the top of each column reset that lineup.
                         # Build the analysis card HTML
                         st.markdown(f"""
                         <div class="analysis-card">
-                            <span class="place-badge {raw_place_class}" style="margin-right: 0.25rem;">{raw_place_label} <span style="font-weight: 400; opacity: 0.8;">raw</span></span>
-                            <span class="place-badge {adj_place_class}">{adj_place_label} <span style="font-weight: 400; opacity: 0.8;">adj.</span></span>
+                            <span class="place-badge {raw_place_class}" style="margin-right: 0.25rem;">{raw_place_label} <span style="font-weight: 400;">raw</span></span>
+                            <span class="place-badge {adj_place_class}">{adj_place_label} <span style="font-weight: 400;">adj.</span></span>
                             <div class="analysis-stat">
                                 <span class="stat-label">Split</span>
                                 <span class="stat-value">{format_split(split_500m)}</span>
