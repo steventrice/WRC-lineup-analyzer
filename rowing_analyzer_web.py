@@ -7008,11 +7008,8 @@ Clear buttons at the top of each column reset that lineup.
 
         # Show erg-to-water indicator if enabled
         if erg_to_water:
-            lineup_tech_effs = set(r.get('tech_efficiency', 1.05) for r in all_results)
-            tech_eff_value = list(lineup_tech_effs)[0] if len(lineup_tech_effs) == 1 else 1.05
-            tech_eff_str = f"{tech_eff_value:.2f}" if len(lineup_tech_effs) <= 1 else "varies"
             boat_factor = get_boat_factor(boat_class)
-            caption = f"*On-Water Projection* | {boat_class} Factor: {boat_factor:.2f} | Tech Eff: {tech_eff_str}"
+            caption = f"*On-Water Projection* | {boat_class} Factor: {boat_factor:.2f}"
             if race_distance != target_distance:
                 caption += f" | Race: {race_distance}m"
             st.caption(caption)
