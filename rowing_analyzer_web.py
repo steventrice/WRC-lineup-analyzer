@@ -6805,32 +6805,32 @@ Clear buttons at the top of each column reset that lineup.
         animation: fadeSlideIn 0.3s ease-out;
         padding: 0.75rem;
         border-radius: 8px;
-        background: linear-gradient(135deg, rgba(49, 51, 63, 0.03) 0%, rgba(49, 51, 63, 0.06) 100%);
-        border: 1px solid rgba(49, 51, 63, 0.1);
+        background: linear-gradient(135deg, rgba(128, 128, 128, 0.05) 0%, rgba(128, 128, 128, 0.1) 100%);
+        border: 1px solid rgba(128, 128, 128, 0.2);
         margin-top: 0.5rem;
     }
     .analysis-card h4 {
         margin: 0 0 0.5rem 0;
         font-size: 0.9rem;
-        color: rgb(49, 51, 63);
+        color: inherit;
     }
     .analysis-stat {
         display: flex;
         justify-content: space-between;
         padding: 0.25rem 0;
-        border-bottom: 1px solid rgba(49, 51, 63, 0.05);
+        border-bottom: 1px solid rgba(128, 128, 128, 0.15);
     }
     .analysis-stat:last-child {
         border-bottom: none;
     }
     .stat-label {
-        color: rgba(49, 51, 63, 0.85);
+        opacity: 0.8;
         font-size: 0.85rem;
     }
     .stat-value {
         font-weight: 600;
         font-size: 0.85rem;
-        color: rgb(49, 51, 63);
+        color: inherit;
     }
     .place-badge {
         display: inline-block;
