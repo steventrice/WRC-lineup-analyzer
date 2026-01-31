@@ -394,6 +394,95 @@ def is_name_in_list(roster_name: str, entry_names: list) -> bool:
     return False
 
 
+def get_hot_seat_rowers(target_event_time: str, target_regatta: str, target_day: str,
+                        entries: List[dict], events: List, threshold_minutes: int) -> Set[str]:
+    """Return rowers committed to events within threshold_minutes of target.
+
+    Args:
+        target_event_time: Time string of the target event (e.g., "8:30 AM")
+        target_regatta: Regatta name to filter entries
+        target_day: Day string to filter entries (e.g., "Sunday, March 8, 2026")
+        entries: List of entry dicts from load_entries_from_gsheet()
+        events: List of RegattaEvent objects for the regatta
+        threshold_minutes: Time window in minutes to consider as hot-seating
+
+    Returns:
+        Set of rower names who are in events within the threshold window
+    """
+    from datetime import datetime
+    import re
+
+    hot_seat_rowers = set()
+
+    if not target_event_time or threshold_minutes <= 0:
+        return hot_seat_rowers
+
+    # Parse target event time
+    def parse_time(time_str: str):
+        """Parse time string to datetime for comparison"""
+        if not time_str:
+            return None
+        time_str = time_str.strip().upper()
+        # Normalize all whitespace (including non-breaking spaces) to single regular space
+        time_str = re.sub(r'\s+', ' ', time_str)
+        # Remove seconds if present (e.g., "10:30:00 AM" -> "10:30 AM")
+        if time_str.count(':') >= 2:
+            time_str = re.sub(r':\d{2}(?=\s|$)', '', time_str)
+        for fmt in ['%I:%M %p', '%H:%M', '%I:%M%p']:
+            try:
+                return datetime.strptime(time_str, fmt)
+            except:
+                continue
+        return None
+
+    target_time = parse_time(target_event_time)
+    if not target_time:
+        return hot_seat_rowers
+
+    # Build event_number -> parsed_time mapping from events list
+    event_times = {}
+    for event in events:
+        parsed = parse_time(event.event_time)
+        if parsed:
+            event_times[event.event_number] = parsed
+
+    # Check each entry for the same regatta/day
+    # Handle regatta names that may have day appended (e.g., "Covered Bridge|Saturday, April 25, 2026")
+    target_regatta_base = target_regatta.split('|')[0] if '|' in target_regatta else target_regatta
+
+    for entry in entries:
+        # Filter to same regatta and day
+        entry_regatta = entry.get('regatta', '')
+        entry_regatta_base = entry_regatta.split('|')[0] if '|' in entry_regatta else entry_regatta
+        if entry_regatta_base != target_regatta_base:
+            continue
+        if entry.get('day') != target_day:
+            continue
+
+        # Get entry's event time
+        entry_event_num = entry.get('event_number')
+        entry_time = event_times.get(entry_event_num)
+
+        # Fallback: try to parse event_time from entry itself
+        if not entry_time:
+            entry_time = parse_time(entry.get('event_time', ''))
+
+        if not entry_time:
+            continue
+
+        # Calculate time difference in minutes
+        delta_minutes = abs((entry_time - target_time).total_seconds() / 60)
+
+        # If within threshold, add all rowers from this entry
+        if delta_minutes < threshold_minutes and delta_minutes > 0:  # Exclude the target event itself
+            rowers = entry.get('rowers', [])
+            for rower in rowers:
+                if rower:  # Skip empty strings
+                    hot_seat_rowers.add(rower)
+
+    return hot_seat_rowers
+
+
 def parse_event_gender(event_name: str) -> Optional[str]:
     """Extract gender from event name. Returns 'M', 'W', or 'Mix'."""
     name_lower = event_name.lower()
@@ -4809,6 +4898,12 @@ def main():
     if 'excluded_rowers' not in st.session_state:
         st.session_state.excluded_rowers = set()
 
+    # Initialize hot-seat exclusion settings
+    if 'exclude_hot_seats' not in st.session_state:
+        st.session_state.exclude_hot_seats = False
+    if 'hot_seat_threshold' not in st.session_state:
+        st.session_state.hot_seat_threshold = 50
+
     # Initialize help dialog state
     if 'show_help' not in st.session_state:
         st.session_state.show_help = False
@@ -5678,6 +5773,28 @@ Clear buttons at the top of each column reset that lineup.
                 help="Show controls to lock seats (preserve during autofill) and exclude rowers from autofill"
             )
 
+            # Hot-seat exclusion controls (only visible when event is selected)
+            if is_event_mode:
+                hot_seat_cols = st.columns([1, 1])
+                with hot_seat_cols[0]:
+                    st.session_state.exclude_hot_seats = st.checkbox(
+                        "🔥 Exclude hot seats",
+                        value=st.session_state.exclude_hot_seats,
+                        key="exclude_hot_seats_cb",
+                        help="Exclude rowers already committed to events within the threshold time of this event"
+                    )
+                with hot_seat_cols[1]:
+                    if st.session_state.exclude_hot_seats:
+                        st.session_state.hot_seat_threshold = st.number_input(
+                            "Threshold (min)",
+                            min_value=0,
+                            max_value=120,
+                            value=st.session_state.hot_seat_threshold,
+                            step=5,
+                            key="hot_seat_threshold_input",
+                            help="Exclude rowers in events within this many minutes"
+                        )
+
         # Handle autofill button clicks
         if autofill_raw_clicked or autofill_adj_clicked:
             # Get min_avg_age from session state (more reliable than local variable)
@@ -5697,6 +5814,38 @@ Clear buttons at the top of each column reset that lineup.
             # Get effective constraints (always use autofill_gender_constraint - it's set correctly in both modes)
             effective_gender = autofill_gender_constraint
 
+            # Build combined exclusion set (manual exclusions + hot-seat exclusions)
+            combined_exclusions = set(st.session_state.excluded_rowers)
+            hot_seat_exclusions = set()  # Track hot-seat rowers separately for lineup check
+
+            # Add hot-seat exclusions if enabled and event is selected
+            if is_event_mode and st.session_state.exclude_hot_seats and st.session_state.hot_seat_threshold > 0:
+                # Find the selected event's time and day
+                target_event_time = None
+                target_event_day = None
+                for event in events:
+                    if event.event_number == st.session_state.autofill_selected_event:
+                        target_event_time = event.event_time
+                        target_event_day = event.day
+                        break
+
+                if target_event_time and target_event_day:
+                    # Load existing entries
+                    existing_entries = load_entries_from_gsheet()
+
+                    # Get rowers in events within threshold
+                    hot_seat_exclusions = get_hot_seat_rowers(
+                        target_event_time=target_event_time,
+                        target_regatta=selected_regatta,
+                        target_day=target_event_day,
+                        entries=existing_entries,
+                        events=events,
+                        threshold_minutes=st.session_state.hot_seat_threshold
+                    )
+
+                    # Add to combined exclusions
+                    combined_exclusions.update(hot_seat_exclusions)
+
             # Helper to get locked rowers dict for a lineup slot
             def get_locked_rowers_for_slot(slot: str) -> dict:
                 """Get dict of {seat_index: rower_name} for locked seats in a lineup."""
@@ -5707,6 +5856,31 @@ Clear buttons at the top of each column reset that lineup.
                     if seat_idx < len(lineup) and lineup[seat_idx]:
                         locked_rowers[seat_idx] = lineup[seat_idx]
                 return locked_rowers
+
+            # Helper to get non-locked rowers from a lineup slot
+            def get_non_locked_rowers_for_slot(slot: str) -> set:
+                """Get set of rower names in non-locked seats of a lineup."""
+                locked_seats = st.session_state.get(f'locked_seats_{slot}', set())
+                lineup = st.session_state.get(f'lineup_{slot}', [])
+                non_locked = set()
+                for seat_idx, rower in enumerate(lineup):
+                    if rower and seat_idx not in locked_seats:
+                        non_locked.add(rower)
+                return non_locked
+
+            # When hot-seat exclusion is enabled, also check current non-locked rowers
+            # in target lineup(s) - exclude them only if they have hot-seat conflicts
+            if is_event_mode and st.session_state.exclude_hot_seats and hot_seat_exclusions:
+                if autofill_target == "All (Top 3)":
+                    for slot in ['a', 'b', 'c']:
+                        current_rowers = get_non_locked_rowers_for_slot(slot)
+                        # Only exclude if they're in the hot-seat set
+                        combined_exclusions.update(current_rowers & hot_seat_exclusions)
+                else:
+                    target_slot = autofill_target.split()[-1].lower()
+                    current_rowers = get_non_locked_rowers_for_slot(target_slot)
+                    # Only exclude if they're in the hot-seat set
+                    combined_exclusions.update(current_rowers & hot_seat_exclusions)
 
             # Determine which slot(s) we're filling and their locked rowers
             if autofill_target == "All (Top 3)":
@@ -5734,7 +5908,7 @@ Clear buttons at the top of each column reset that lineup.
                         gender=effective_gender,
                         min_avg_age=effective_min_avg_age,
                         num_results=1,
-                        excluded_rowers=st.session_state.excluded_rowers,
+                        excluded_rowers=combined_exclusions,
                         locked_rowers=locks_by_slot[slot]
                     )
                     if slot_lineups:
@@ -5753,7 +5927,7 @@ Clear buttons at the top of each column reset that lineup.
                         gender=effective_gender,
                         min_avg_age=effective_min_avg_age,
                         num_results=len(slots_without_locks),
-                        excluded_rowers=st.session_state.excluded_rowers,
+                        excluded_rowers=combined_exclusions,
                         locked_rowers=None
                     )
                     # Assign different lineups to each unlocked slot
@@ -5779,7 +5953,7 @@ Clear buttons at the top of each column reset that lineup.
                     gender=effective_gender,
                     min_avg_age=effective_min_avg_age,
                     num_results=num_lineups,
-                    excluded_rowers=st.session_state.excluded_rowers,
+                    excluded_rowers=combined_exclusions,
                     locked_rowers=locked_rowers
                 )
 
