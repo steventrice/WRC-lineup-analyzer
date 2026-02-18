@@ -5578,6 +5578,9 @@ Clear buttons at the top of each column reset that lineup.
                     export_entries.append(entry)
 
             # Sort by day, event time, event number
+            from datetime import datetime as _dt
+            _max_time = _dt(9999, 12, 31)
+
             def parse_time_for_export(time_str: str):
                 if not time_str:
                     return None
@@ -5586,14 +5589,14 @@ Clear buttons at the top of each column reset that lineup.
                     time_str = re.sub(r':\d{2}(?=\s|$)', '', time_str)
                 for fmt in ['%I:%M %p', '%H:%M', '%I:%M%p', '%I:%M  %p']:
                     try:
-                        return datetime.strptime(time_str.replace('  ', ' '), fmt)
+                        return _dt.strptime(time_str.replace('  ', ' '), fmt)
                     except:
                         continue
                 return None
 
             export_entries.sort(key=lambda e: (
                 e.get('day', ''),
-                parse_time_for_export(e.get('event_time', '')) or datetime.max,
+                parse_time_for_export(e.get('event_time', '')) or _max_time,
                 e.get('event_number', 0)
             ))
 
