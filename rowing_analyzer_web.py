@@ -4462,6 +4462,11 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
         st.caption(f"**Event:** {event_name}")
         st.caption(f"**Detected:** Gender={event_gender or 'Any'}, Boat={event_boat or 'Any'}, Category={event_category or 'Any'}")
 
+        # For coxed boats, allow including all genders (cox can be any gender)
+        include_all_genders = False
+        if event_boat and '+' in event_boat:
+            include_all_genders = st.checkbox("Include all genders (for cox)", key="cox_all_genders")
+
         # Get all rowers signed up for this regatta (and day if specified)
         regatta_for_filter = regatta_name  # Use the regatta name from earlier in function
         # Extract day from selected_regatta if present (format: "RegattaName|Day")
@@ -4512,8 +4517,8 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                 continue
 
 
-            # Check gender eligibility
-            if event_gender:
+            # Check gender eligibility (skip if cox toggle is on)
+            if event_gender and not include_all_genders:
                 if event_gender == 'Mixed':
                     pass  # Anyone can row mixed
                 elif event_gender == 'M' and rower.gender != 'M':
@@ -5560,9 +5565,41 @@ Clear buttons at the top of each column reset that lineup.
         # Export button at bottom of event panel
         if st.session_state.event_entries:
             st.divider()
+
+            # Filter entries to selected regatta only
+            export_regatta_name = selected_regatta.split("|")[0] if "|" in selected_regatta else selected_regatta
+            export_regatta_lower = export_regatta_name.lower()
+            export_entries = []
+            for entry in st.session_state.event_entries:
+                entry_regatta = entry.get('regatta', '').lower()
+                if (entry_regatta == export_regatta_lower or
+                    entry_regatta in export_regatta_lower or
+                    export_regatta_lower in entry_regatta):
+                    export_entries.append(entry)
+
+            # Sort by day, event time, event number
+            def parse_time_for_export(time_str: str):
+                if not time_str:
+                    return None
+                time_str = time_str.strip().upper()
+                if time_str.count(':') >= 2:
+                    time_str = re.sub(r':\d{2}(?=\s|$)', '', time_str)
+                for fmt in ['%I:%M %p', '%H:%M', '%I:%M%p', '%I:%M  %p']:
+                    try:
+                        return datetime.strptime(time_str.replace('  ', ' '), fmt)
+                    except:
+                        continue
+                return None
+
+            export_entries.sort(key=lambda e: (
+                e.get('day', ''),
+                parse_time_for_export(e.get('event_time', '')) or datetime.max,
+                e.get('event_number', 0)
+            ))
+
             # Create CSV data
             csv_lines = ["Regatta,Day,Event Number,Event Name,Event Time,Entry Number,Boat Class,Category,Avg Age,Lineup,Boat,Timestamp"]
-            for entry in st.session_state.event_entries:
+            for entry in export_entries:
                 lineup_str = format_lineup_string(entry['rowers'], entry['boat_class'])
                 # Escape commas in fields
                 csv_lines.append(",".join([
@@ -5580,10 +5617,11 @@ Clear buttons at the top of each column reset that lineup.
                     entry['timestamp']
                 ]))
             csv_data = "\n".join(csv_lines)
+            safe_filename = re.sub(r'[^a-z0-9]+', '_', export_regatta_lower).strip('_')
             st.download_button(
                 label="📥 Export CSV",
                 data=csv_data,
-                file_name="event_entries.csv",
+                file_name=f"{safe_filename}_entries.csv",
                 mime="text/csv",
                 use_container_width=True
             )
