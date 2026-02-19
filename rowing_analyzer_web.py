@@ -5855,7 +5855,7 @@ Clear buttons at the top of each column reset that lineup.
                         st.rerun()
                 with excl_cols[2]:
                     if st.button("Clear Exclusions", key="bulk_excl_clear", use_container_width=True):
-                        for rname in list(st.session_state.excluded_rowers):
+                        for rname in roster_manager.rowers:
                             st.session_state.pop(f"exclude_{rname}", None)
                         st.session_state.excluded_rowers = set()
                         st.rerun()
