@@ -3139,7 +3139,7 @@ def get_gms_spreadsheet_id():
 def shorten_names(names: List[str]) -> List[str]:
     """Convert full names to short format: First or FirstL if duplicate first names.
 
-    Example: ["John Smith", "Jane Doe", "John Adams"] -> ["JohnS", "Jane", "JohnA"]
+    Example: ["John Smith", "Jane Doe", "John Adams"] -> ["John S", "Jane", "John A"]
     """
     if not names:
         return []
@@ -3167,7 +3167,7 @@ def shorten_names(names: List[str]) -> List[str]:
             last_initial = parts[-1][0].upper() if parts[-1] else ""
             # Use FirstL format if duplicate first names
             if first_name_counts.get(first_name, 0) > 1:
-                short_names.append(f"{first_name}{last_initial}")
+                short_names.append(f"{first_name} {last_initial}")
             else:
                 short_names.append(first_name)
         elif name:
@@ -3861,7 +3861,26 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
     needs_boat_count = sum(1 for entry in dashboard_entries if not str(entry.get('boat', '') or '').strip())
 
     # Display summary
-    st.subheader(f"📊 {regatta_name}")
+    dash_header_cols = st.columns([6, 1])
+    with dash_header_cols[0]:
+        st.subheader(f"📊 {regatta_name}")
+    with dash_header_cols[1]:
+        if total_entries > 0:
+            with st.popover("🗑️ Clear All", use_container_width=True):
+                st.warning(f"Delete all **{total_entries}** entries for this regatta?")
+                if st.button("Yes, delete all", key="confirm_clear_all_entries", type="primary", use_container_width=True):
+                    deleted_count = 0
+                    for entry in list(dashboard_entries):
+                        if delete_entry_from_gsheet(entry):
+                            deleted_count += 1
+                        if entry in st.session_state.event_entries:
+                            st.session_state.event_entries.remove(entry)
+                    if 'editing_entry' in st.session_state:
+                        del st.session_state['editing_entry']
+                    if 'editing_event' in st.session_state:
+                        del st.session_state['editing_event']
+                    st.toast(f"Deleted {deleted_count} entries")
+                    st.rerun()
     summary_cols = st.columns(8)
     with summary_cols[0]:
         st.metric("Events", f"{events_with_entries_count}/{total_targeted_events}")
@@ -5319,6 +5338,9 @@ Clear buttons at the top of each column reset that lineup.
                 st.session_state.boat_a = None
                 st.session_state.boat_b = None
                 st.session_state.boat_c = None
+                # Clear boat selectbox widget keys so they reset visually
+                for wk in ['boat_select_lineup_a', 'boat_select_lineup_b', 'boat_select_lineup_c']:
+                    st.session_state.pop(wk, None)
                 # Clear locked seats
                 st.session_state.locked_seats_a = set()
                 st.session_state.locked_seats_b = set()
@@ -5557,6 +5579,24 @@ Clear buttons at the top of each column reset that lineup.
                                     del st.session_state['editing_entry']
                                     if 'editing_event' in st.session_state:
                                         del st.session_state['editing_event']
+                                st.rerun()
+                    # "Clear Event" button when event has 2+ entries
+                    if len(event_entries) >= 2:
+                        with st.popover("🗑️ Clear Event"):
+                            st.warning(f"Delete all **{len(event_entries)}** entries for this event?")
+                            if st.button("Yes, clear event", key=f"clear_event_{event.event_number}", type="primary", use_container_width=True):
+                                deleted = 0
+                                for entry in list(event_entries):
+                                    if delete_entry_from_gsheet(entry):
+                                        deleted += 1
+                                    if entry in st.session_state.event_entries:
+                                        st.session_state.event_entries.remove(entry)
+                                editing = st.session_state.get('editing_entry')
+                                if editing and editing.get('event_number') == event.event_number:
+                                    del st.session_state['editing_entry']
+                                    if 'editing_event' in st.session_state:
+                                        del st.session_state['editing_event']
+                                st.toast(f"Deleted {deleted} entries from {event.event_name}")
                                 st.rerun()
 
             # Gridline after each row
@@ -5813,6 +5853,26 @@ Clear buttons at the top of each column reset that lineup.
                 key="show_autofill_controls_cb",
                 help="Show controls to lock seats (preserve during autofill) and exclude rowers from autofill"
             )
+
+            # Bulk exclusion buttons (only visible when locks & exclusions enabled)
+            if st.session_state.show_autofill_controls:
+                excl_cols = st.columns(3)
+                with excl_cols[0]:
+                    if st.button("Exclude Women", key="bulk_excl_women", use_container_width=True):
+                        for rname, rdata in roster_manager.rowers.items():
+                            if rdata.get('gender', '').upper() == 'F':
+                                st.session_state.excluded_rowers.add(rname)
+                        st.rerun()
+                with excl_cols[1]:
+                    if st.button("Exclude Men", key="bulk_excl_men", use_container_width=True):
+                        for rname, rdata in roster_manager.rowers.items():
+                            if rdata.get('gender', '').upper() == 'M':
+                                st.session_state.excluded_rowers.add(rname)
+                        st.rerun()
+                with excl_cols[2]:
+                    if st.button("Clear Exclusions", key="bulk_excl_clear", use_container_width=True):
+                        st.session_state.excluded_rowers = set()
+                        st.rerun()
 
             # Hot-seat exclusion controls (only visible when event is selected)
             if is_event_mode:
@@ -6691,6 +6751,7 @@ Clear buttons at the top of each column reset that lineup.
                 if current_boat:
                     if st.button("❌", key=f"remove_boat_{key}"):
                         st.session_state[boat_key] = None
+                        st.session_state.pop(f"boat_select_{key}", None)
                         st.rerun()
 
             # Cox slot for coxed boats (4+, 8+)
@@ -6874,12 +6935,18 @@ Clear buttons at the top of each column reset that lineup.
                         first_name = parts[0]
                         last_initial = parts[-1][0]
                         if first_name in duplicate_first_names:
-                            short_names.append(f"{first_name}{last_initial}")
+                            short_names.append(f"{first_name} {last_initial}")
                         else:
                             short_names.append(first_name)
                     else:
                         short_names.append(name)
-                names_text = "-".join(short_names)
+
+                # Format: "Cox: Stroke-7-...-Bow" for coxed boats, else "Stroke-7-...-Bow"
+                if cox_name_for_entry and len(short_names) > 1:
+                    cox_short = short_names.pop()  # Cox is last in list
+                    names_text = f"{cox_short}: " + "-".join(short_names)
+                else:
+                    names_text = "-".join(short_names)
                 b64_names = base64.b64encode(names_text.encode('utf-8')).decode('ascii')
                 btn_id = f"copyLineup_{key}"
                 components.html(f"""
