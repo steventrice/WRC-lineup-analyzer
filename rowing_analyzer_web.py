@@ -5844,14 +5844,14 @@ Clear buttons at the top of each column reset that lineup.
                         for rname, rdata in roster_manager.rowers.items():
                             if getattr(rdata, 'gender', '').upper() == 'F':
                                 st.session_state.excluded_rowers.add(rname)
-                                st.session_state[f"exclude_{rname}"] = True
+                                st.session_state.pop(f"exclude_{rname}", None)
                         st.rerun()
                 with excl_cols[1]:
                     if st.button("Exclude Men", key="bulk_excl_men", use_container_width=True):
                         for rname, rdata in roster_manager.rowers.items():
                             if getattr(rdata, 'gender', '').upper() == 'M':
                                 st.session_state.excluded_rowers.add(rname)
-                                st.session_state[f"exclude_{rname}"] = True
+                                st.session_state.pop(f"exclude_{rname}", None)
                         st.rerun()
                 with excl_cols[2]:
                     if st.button("Clear Exclusions", key="bulk_excl_clear", use_container_width=True):
