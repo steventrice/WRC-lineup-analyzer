@@ -5580,24 +5580,6 @@ Clear buttons at the top of each column reset that lineup.
                                     if 'editing_event' in st.session_state:
                                         del st.session_state['editing_event']
                                 st.rerun()
-                    # "Clear Event" button when event has 2+ entries
-                    if len(event_entries) >= 2:
-                        with st.popover("🗑️ Clear Event"):
-                            st.warning(f"Delete all **{len(event_entries)}** entries for this event?")
-                            if st.button("Yes, clear event", key=f"clear_event_{event.event_number}", type="primary", use_container_width=True):
-                                deleted = 0
-                                for entry in list(event_entries):
-                                    if delete_entry_from_gsheet(entry):
-                                        deleted += 1
-                                    if entry in st.session_state.event_entries:
-                                        st.session_state.event_entries.remove(entry)
-                                editing = st.session_state.get('editing_entry')
-                                if editing and editing.get('event_number') == event.event_number:
-                                    del st.session_state['editing_entry']
-                                    if 'editing_event' in st.session_state:
-                                        del st.session_state['editing_event']
-                                st.toast(f"Deleted {deleted} entries from {event.event_name}")
-                                st.rerun()
 
             # Gridline after each row
             st.markdown("<hr style='margin: 2px 0; border-color: #333; border-width: 0.5px;'>", unsafe_allow_html=True)
@@ -5860,13 +5842,13 @@ Clear buttons at the top of each column reset that lineup.
                 with excl_cols[0]:
                     if st.button("Exclude Women", key="bulk_excl_women", use_container_width=True):
                         for rname, rdata in roster_manager.rowers.items():
-                            if rdata.get('gender', '').upper() == 'F':
+                            if getattr(rdata, 'gender', '').upper() == 'F':
                                 st.session_state.excluded_rowers.add(rname)
                         st.rerun()
                 with excl_cols[1]:
                     if st.button("Exclude Men", key="bulk_excl_men", use_container_width=True):
                         for rname, rdata in roster_manager.rowers.items():
-                            if rdata.get('gender', '').upper() == 'M':
+                            if getattr(rdata, 'gender', '').upper() == 'M':
                                 st.session_state.excluded_rowers.add(rname)
                         st.rerun()
                 with excl_cols[2]:
