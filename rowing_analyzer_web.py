@@ -5842,23 +5842,23 @@ Clear buttons at the top of each column reset that lineup.
                 with excl_cols[0]:
                     if st.button("Exclude Women", key="bulk_excl_women", use_container_width=True):
                         for rname, rdata in roster_manager.rowers.items():
-                            if getattr(rdata, 'gender', '').upper() == 'F':
+                            is_woman = getattr(rdata, 'gender', '').upper() == 'F'
+                            if is_woman:
                                 st.session_state.excluded_rowers.add(rname)
-                        for rname in roster_manager.rowers:
-                            st.session_state.pop(f"exclude_{rname}", None)
+                            st.session_state[f"exclude_{rname}"] = is_woman or rname in st.session_state.excluded_rowers
                         st.rerun()
                 with excl_cols[1]:
                     if st.button("Exclude Men", key="bulk_excl_men", use_container_width=True):
                         for rname, rdata in roster_manager.rowers.items():
-                            if getattr(rdata, 'gender', '').upper() == 'M':
+                            is_man = getattr(rdata, 'gender', '').upper() == 'M'
+                            if is_man:
                                 st.session_state.excluded_rowers.add(rname)
-                        for rname in roster_manager.rowers:
-                            st.session_state.pop(f"exclude_{rname}", None)
+                            st.session_state[f"exclude_{rname}"] = is_man or rname in st.session_state.excluded_rowers
                         st.rerun()
                 with excl_cols[2]:
                     if st.button("Clear Exclusions", key="bulk_excl_clear", use_container_width=True):
                         for rname in roster_manager.rowers:
-                            st.session_state.pop(f"exclude_{rname}", None)
+                            st.session_state[f"exclude_{rname}"] = False
                         st.session_state.excluded_rowers = set()
                         st.rerun()
 
@@ -6433,9 +6433,9 @@ Clear buttons at the top of each column reset that lineup.
                         st.rerun()
                 with roster_cols[1]:
                     # Use checkbox for exclude toggle - checked means EXCLUDED
+                    st.session_state.setdefault(f"exclude_{name}", is_excluded)
                     new_excluded = st.checkbox(
                         "X",
-                        value=is_excluded,
                         key=f"exclude_{name}",
                         label_visibility="collapsed"
                     )
@@ -6492,9 +6492,9 @@ Clear buttons at the top of each column reset that lineup.
                         st.rerun()
                 with roster_cols[1]:
                     # Use checkbox for exclude toggle - checked means EXCLUDED
+                    st.session_state.setdefault(f"exclude_{name}", is_excluded)
                     new_excluded = st.checkbox(
                         "X",
-                        value=is_excluded,
                         key=f"exclude_{name}",
                         label_visibility="collapsed"
                     )
