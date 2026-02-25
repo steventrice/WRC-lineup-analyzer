@@ -6907,34 +6907,13 @@ Clear buttons at the top of each column reset that lineup.
             if cox_name_for_entry:
                 rower_names_list.append(cox_name_for_entry)
             if rower_names_list:
-                # Find duplicate first names in the roster
-                all_first_names = []
-                for full_name in roster_manager.rowers.keys():
-                    parts = full_name.split()
-                    if parts:
-                        all_first_names.append(parts[0])
-                duplicate_first_names = set(n for n in all_first_names if all_first_names.count(n) > 1)
-
-                # Format as "First" or "FirstL" (if duplicate) joined by dashes
-                short_names = []
-                for name in rower_names_list:
-                    parts = name.split()
-                    if len(parts) >= 2:
-                        first_name = parts[0]
-                        last_initial = parts[-1][0]
-                        if first_name in duplicate_first_names:
-                            short_names.append(f"{first_name} {last_initial}")
-                        else:
-                            short_names.append(first_name)
-                    else:
-                        short_names.append(name)
-
                 # Format: "Cox: Stroke-7-...-Bow" for coxed boats, else "Stroke-7-...-Bow"
-                if cox_name_for_entry and len(short_names) > 1:
-                    cox_short = short_names.pop()  # Cox is last in list
-                    names_text = f"{cox_short}: " + "-".join(short_names)
+                full_names = list(rower_names_list)
+                if cox_name_for_entry and len(full_names) > 1:
+                    cox_full = full_names.pop()  # Cox is last in list
+                    names_text = f"{cox_full}: " + "-".join(full_names)
                 else:
-                    names_text = "-".join(short_names)
+                    names_text = "-".join(full_names)
                 b64_names = base64.b64encode(names_text.encode('utf-8')).decode('ascii')
                 btn_id = f"copyLineup_{key}"
                 components.html(f"""
