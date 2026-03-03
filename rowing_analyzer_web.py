@@ -2748,7 +2748,7 @@ class LineupOptimizer:
                             results.append(result)
 
             # For category optimization, try strategic age-balanced combinations
-            if optimize_for == 'category' and min_avg_age > 0:
+            if optimize_for in ('category', 'raw') and min_avg_age > 0:
                 if gender == "Mixed" and need_men is not None and need_women is not None:
                     # For Mixed category, do age/speed balancing within each gender
                     males_by_age = sorted(males_sorted, key=lambda r: r.age, reverse=True)
@@ -5840,8 +5840,11 @@ Clear buttons at the top of each column reset that lineup.
             # Autofill buttons - add spacing to align with other controls
             with autofill_cols[3]:
                 st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-                autofill_raw_clicked = st.button("⚡ Fill Fastest Raw", use_container_width=True,
-                                                  help="Find fastest lineup by raw erg time (ignores age)")
+                if is_event_mode and autofill_min_avg_age > 0:
+                    raw_help = f"Find fastest raw lineup meeting age category (avg ≥{autofill_min_avg_age})"
+                else:
+                    raw_help = "Find fastest lineup by raw erg time"
+                autofill_raw_clicked = st.button("⚡ Fill Fastest Raw", use_container_width=True, help=raw_help)
 
             with autofill_cols[4]:
                 st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
