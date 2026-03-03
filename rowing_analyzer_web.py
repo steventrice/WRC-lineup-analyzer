@@ -2764,8 +2764,8 @@ class LineupOptimizer:
                         if result:
                             results.append(result)
 
-            # For category optimization, try strategic age-balanced combinations
-            if optimize_for in ('category', 'raw') and min_avg_age > 0:
+            # Try strategic age-balanced combinations when age constraint is active
+            if min_avg_age > 0:
                 if gender == "Mixed" and need_men is not None and need_women is not None:
                     # For Mixed category, do age/speed balancing within each gender
                     males_by_age = sorted(males_sorted, key=lambda r: r.age, reverse=True)
@@ -5868,7 +5868,7 @@ Clear buttons at the top of each column reset that lineup.
                 # Button label changes based on mode
                 if is_event_mode and autofill_min_avg_age > 0:
                     autofill_adj_clicked = st.button("⚡ Fill For Category", use_container_width=True,
-                                                      help=f"Find fastest lineup meeting age requirement (≥{autofill_min_avg_age})")
+                                                      help=f"Find best handicap-adjusted lineup meeting age (≥{autofill_min_avg_age})")
                 else:
                     autofill_adj_clicked = st.button("⚡ Fill Fastest Adj", use_container_width=True,
                                                       help="Find fastest lineup by handicap-adjusted time")
@@ -5936,14 +5936,12 @@ Clear buttons at the top of each column reset that lineup.
 
             # Determine optimization mode
             if autofill_raw_clicked and is_event_mode and effective_min_avg_age > 0:
-                # Raw button with event age constraint: use category mode for age-aware search
+                # Raw + event: fastest raw time meeting age constraint
                 optimize_for = 'category'
             elif autofill_raw_clicked:
                 optimize_for = 'raw'
-            elif is_event_mode and effective_min_avg_age > 0:
-                # With event selected, optimize for fastest raw time that meets category
-                optimize_for = 'category'
             else:
+                # Adj button always optimizes for adjusted time; age enforced by _evaluate_lineup
                 optimize_for = 'adjusted'
 
             num_lineups = 3 if autofill_target == "All (Top 3)" else 1
@@ -6113,7 +6111,7 @@ Clear buttons at the top of each column reset that lineup.
                     if len(males) < half_seats or len(females) < half_seats:
                         st.warning(f"Could not find valid Mixed lineup. Need {half_seats} of each gender, "
                                   f"but only have {len(males)} men and {len(females)} women with erg scores.")
-                    elif optimize_for == 'category' and effective_min_avg_age > 0:
+                    elif effective_min_avg_age > 0:
                         ages = sorted([r.age for r in eligible], reverse=True)
                         max_avg_age = sum(ages[:num_rowing_seats]) / num_rowing_seats if ages else 0
                         st.warning(f"Could not find Mixed lineup meeting category min age ({effective_min_avg_age}). "
@@ -6121,7 +6119,7 @@ Clear buttons at the top of each column reset that lineup.
                     else:
                         st.warning(f"Could not find valid Mixed lineup from {len(eligible)} eligible rowers "
                                   f"({len(males)} men, {len(females)} women).")
-                elif optimize_for == 'category' and effective_min_avg_age > 0:
+                elif effective_min_avg_age > 0:
                     # Calculate max possible avg age from eligible rowers
                     ages = sorted([r.age for r in eligible], reverse=True)
                     max_avg_age = sum(ages[:num_rowing_seats]) / num_rowing_seats if ages else 0
