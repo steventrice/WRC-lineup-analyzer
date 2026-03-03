@@ -508,9 +508,10 @@ def parse_event_boat_class(event_name: str) -> Optional[str]:
 def parse_event_category(event_name: str) -> Optional[str]:
     """Extract masters category from event name.
 
-    Handles both formats:
+    Handles multiple formats:
     - Letter categories: 'Masters A', 'Masters B/C' -> 'A', 'B'
-    - Age categories: 'Masters 30+', 'Masters 40+' -> '30+', '40+'
+    - Age categories: 'Masters 30+', '40+' -> '30+', '40+'
+    - Standalone letters: "Women's F 8+" -> 'F'
     """
     # First try age-based format: "30+", "40+", "50+", etc.
     age_match = re.search(r'(\d{2})\+', event_name)
@@ -522,6 +523,15 @@ def parse_event_category(event_name: str) -> Optional[str]:
     if letter_match:
         # Return first category letter (e.g., "B" from "B/C")
         cat = letter_match.group(1).upper()
+        return cat.split('/')[0] if '/' in cat else cat
+
+    # Fallback: standalone category letter(s) between word boundaries
+    # Matches "Women's F 8+", "Men's D/E 4+", "Mixed AA 8+" etc.
+    # Uses negative lookbehind for digit and negative lookahead for +/-/x
+    # to avoid matching boat class components like "8+" or "4x"
+    standalone = re.search(r'(?<!\d)\b([A-J]{1,2}(?:/[A-J])?)\b(?![+\-x])', event_name)
+    if standalone:
+        cat = standalone.group(1).upper()
         return cat.split('/')[0] if '/' in cat else cat
 
     # Check for "Open" events (no age restriction)
@@ -5918,7 +5928,10 @@ Clear buttons at the top of each column reset that lineup.
             effective_min_avg_age = st.session_state.get('autofill_computed_min_age', autofill_min_avg_age)
 
             # Determine optimization mode
-            if autofill_raw_clicked:
+            if autofill_raw_clicked and is_event_mode and effective_min_avg_age > 0:
+                # Raw button with event age constraint: use category mode for age-aware search
+                optimize_for = 'category'
+            elif autofill_raw_clicked:
                 optimize_for = 'raw'
             elif is_event_mode and effective_min_avg_age > 0:
                 # With event selected, optimize for fastest raw time that meets category
