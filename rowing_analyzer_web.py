@@ -2013,6 +2013,30 @@ BOAT_FACTORS = {
 # Default tech efficiency for Masters/Club (5% slippage)
 DEFAULT_TECH_EFFICIENCY = 1.05
 
+# Default race distances per regatta (matched by case-insensitive substring)
+REGATTA_DEFAULT_DISTANCES = {
+    "spring sprints": 1000,
+    "crew classic": 2000,
+    "opening day": 2000,
+    "covered bridge": 1000,
+    "regionals": 1000,
+    "cascadia": 1000,
+    "head of the dog": 4500,
+    "tail of the lake": 4000,
+    "fall classic": 5000,
+    "head of the charles": 4700,
+    "head of the lake": 4800,
+}
+
+
+def get_regatta_default_distance(regatta_key: str) -> int:
+    """Return default distance for a regatta by fuzzy matching, or 1000m fallback."""
+    regatta_lower = regatta_key.lower()
+    for name, distance in REGATTA_DEFAULT_DISTANCES.items():
+        if name in regatta_lower:
+            return distance
+    return 1000
+
 
 def get_boat_factor(boat_class: str) -> float:
     """Get boat factor for erg-to-water conversion.
@@ -5234,8 +5258,9 @@ Clear buttons at the top of each column reset that lineup.
     if 'regatta_distances' not in st.session_state:
         st.session_state.regatta_distances = {}
 
-    # Get saved distance for this regatta, default to 2000
-    saved_distance = st.session_state.regatta_distances.get(selected_regatta, 2000)
+    # Get saved distance for this regatta, default to regatta-specific distance
+    default_distance = get_regatta_default_distance(selected_regatta)
+    saved_distance = st.session_state.regatta_distances.get(selected_regatta, default_distance)
 
     # Lineup mode: show remaining controls
     if st.session_state.view_mode == 'lineup':
