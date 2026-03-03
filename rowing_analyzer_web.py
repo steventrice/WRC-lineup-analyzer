@@ -1857,11 +1857,15 @@ class RosterManager:
 
         # Then try partial match (regatta name contains or is contained by)
         if not matched_regatta:
+            regatta_words = [w for w in regatta_lower.split() if len(w) > 3]
             for gms_regatta in self.gms_regatta_names:
                 gms_lower = gms_regatta.lower()
-                # Check if key words match
+                gms_words = [w for w in gms_lower.split() if len(w) > 3]
+                # Check if full strings contain each other, or if any long word
+                # from either side appears as a substring in the other
                 if (regatta_lower in gms_lower or gms_lower in regatta_lower or
-                    any(word in gms_lower for word in regatta_lower.split() if len(word) > 3)):
+                    any(word in gms_lower for word in regatta_words) or
+                    any(word in regatta_lower for word in gms_words)):
                     matched_regatta = gms_lower
                     break
 
@@ -1940,10 +1944,13 @@ class RosterManager:
                 matched_regatta = gms_regatta.lower()
                 break
         if not matched_regatta:
+            regatta_words = [w for w in regatta_lower.split() if len(w) > 3]
             for gms_regatta in self.gms_regatta_names:
                 gms_lower = gms_regatta.lower()
+                gms_words = [w for w in gms_lower.split() if len(w) > 3]
                 if (regatta_lower in gms_lower or gms_lower in regatta_lower or
-                    any(word in gms_lower for word in regatta_lower.split() if len(word) > 3)):
+                    any(word in gms_lower for word in regatta_words) or
+                    any(word in regatta_lower for word in gms_words)):
                     matched_regatta = gms_lower
                     break
 
