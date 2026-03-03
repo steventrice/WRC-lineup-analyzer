@@ -2557,6 +2557,7 @@ class LineupOptimizer:
                              target_distance: int, calc_method: str = 'watts',
                              predictor: str = 'power_law', optimize_for: str = 'raw',
                              gender: str = "Men's", min_avg_age: int = 0,
+                             max_avg_age: int = 0,
                              num_results: int = 3, excluded_rowers: Optional[Set[str]] = None,
                              locked_rowers: Optional[Dict[int, str]] = None) -> List[Dict]:
         """Find optimal lineup combinations.
@@ -2571,6 +2572,7 @@ class LineupOptimizer:
             optimize_for: 'raw' for fastest raw time, 'adjusted' for handicap-adjusted
             gender: "Men's", "Women's", or "Mixed"
             min_avg_age: Minimum average age for the lineup
+            max_avg_age: Maximum average age (exclusive) for exact category targeting (0 = no limit)
             num_results: Number of top lineups to return
             excluded_rowers: Set of rower names to exclude from consideration
             locked_rowers: Dict mapping seat index to rower name (seats to preserve)
@@ -2696,7 +2698,7 @@ class LineupOptimizer:
                 debug_counts['total_tried'] += 1
                 result = self._evaluate_lineup(
                     list(combo), boat_class, target_distance, calc_method, predictor,
-                    gender, min_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
+                    gender, min_avg_age, max_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
                 )
                 if result:
                     results.append(result)
@@ -2727,7 +2729,7 @@ class LineupOptimizer:
                         debug_counts['total_tried'] += 1
                         result = self._evaluate_lineup(
                             oldest_combo, boat_class, target_distance, calc_method, predictor,
-                            gender, min_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
+                            gender, min_avg_age, max_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
                         )
                         if result:
                             results.append(result)
@@ -2759,7 +2761,7 @@ class LineupOptimizer:
                         debug_counts['total_tried'] += 1
                         result = self._evaluate_lineup(
                             top_combo, boat_class, target_distance, calc_method, predictor,
-                            gender, min_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
+                            gender, min_avg_age, max_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
                         )
                         if result:
                             results.append(result)
@@ -2790,7 +2792,7 @@ class LineupOptimizer:
                                     debug_counts['total_tried'] += 1
                                     result = self._evaluate_lineup(
                                         combo, boat_class, target_distance, calc_method, predictor,
-                                        gender, min_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
+                                        gender, min_avg_age, max_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
                                     )
                                     if result:
                                         results.append(result)
@@ -2814,7 +2816,7 @@ class LineupOptimizer:
                                 debug_counts['total_tried'] += 1
                                 result = self._evaluate_lineup(
                                     combo, boat_class, target_distance, calc_method, predictor,
-                                    gender, min_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
+                                    gender, min_avg_age, max_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
                                 )
                                 if result:
                                     results.append(result)
@@ -2876,7 +2878,7 @@ class LineupOptimizer:
                         debug_counts['total_tried'] += 1
                         result = self._evaluate_lineup(
                             selected, boat_class, target_distance, calc_method, predictor,
-                            gender, min_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
+                            gender, min_avg_age, max_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
                         )
                         if result:
                             results.append(result)
@@ -2901,7 +2903,7 @@ class LineupOptimizer:
 
     def _evaluate_lineup(self, rowers: List[Rower], boat_class: str, target_distance: int,
                          calc_method: str, predictor: str, gender: str, min_avg_age: int,
-                         rower_watts: Dict[str, float], debug_counts: Dict = None,
+                         max_avg_age: int, rower_watts: Dict[str, float], debug_counts: Dict = None,
                          locked_rowers: Optional[Dict[int, str]] = None, total_seats: Optional[int] = None) -> Optional[Dict]:
         """Evaluate a lineup combination and return results if valid.
 
@@ -2936,6 +2938,10 @@ class LineupOptimizer:
         # Check average age constraint
         avg_age = statistics.mean([r.age for r in rowers])
         if avg_age < min_avg_age:
+            if debug_counts is not None:
+                debug_counts['age_rejected'] = debug_counts.get('age_rejected', 0) + 1
+            return None
+        if max_avg_age > 0 and avg_age >= max_avg_age:
             if debug_counts is not None:
                 debug_counts['age_rejected'] = debug_counts.get('age_rejected', 0) + 1
             return None
@@ -4968,6 +4974,8 @@ def main():
         st.session_state.exclude_hot_seats = False
     if 'hot_seat_threshold' not in st.session_state:
         st.session_state.hot_seat_threshold = 50
+    if 'autofill_exact_category' not in st.session_state:
+        st.session_state.autofill_exact_category = False
 
     # Initialize help dialog state
     if 'show_help' not in st.session_state:
@@ -5825,8 +5833,12 @@ Clear buttons at the top of each column reset that lineup.
 
                         break
 
-                # Store computed min age for button handler
+                # Store computed min/max age for button handler
                 st.session_state.autofill_computed_min_age = autofill_min_avg_age
+                if event_category:
+                    st.session_state.autofill_computed_max_age = get_category_max_age(event_category)
+                else:
+                    st.session_state.autofill_computed_max_age = 0
 
             with autofill_cols[2]:
                 if is_event_mode:
@@ -5840,7 +5852,11 @@ Clear buttons at the top of each column reset that lineup.
                     if event_boat:
                         constraint_parts.append(event_boat)
                     if autofill_min_avg_age > 0:
-                        constraint_parts.append(f"Age≥{autofill_min_avg_age}")
+                        if st.session_state.get('autofill_exact_category', False):
+                            max_age = st.session_state.get('autofill_computed_max_age', 0)
+                            constraint_parts.append(f"Age {autofill_min_avg_age}–{max_age - 1}")
+                        else:
+                            constraint_parts.append(f"Age≥{autofill_min_avg_age}")
                     st.text_input("Constraints", value=", ".join(constraint_parts), disabled=True,
                                   label_visibility="visible")
                 else:
@@ -5858,7 +5874,11 @@ Clear buttons at the top of each column reset that lineup.
             with autofill_cols[3]:
                 st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
                 if is_event_mode and autofill_min_avg_age > 0:
-                    raw_help = f"Find fastest raw lineup meeting age category (avg ≥{autofill_min_avg_age})"
+                    if st.session_state.get('autofill_exact_category', False):
+                        max_age = st.session_state.get('autofill_computed_max_age', 0)
+                        raw_help = f"Find fastest raw lineup with avg age {autofill_min_avg_age}–{max_age - 1}"
+                    else:
+                        raw_help = f"Find fastest raw lineup meeting age category (avg ≥{autofill_min_avg_age})"
                 else:
                     raw_help = "Find fastest lineup by raw erg time"
                 autofill_raw_clicked = st.button("⚡ Fill Fastest Raw", use_container_width=True, help=raw_help)
@@ -5867,8 +5887,13 @@ Clear buttons at the top of each column reset that lineup.
                 st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
                 # Button label changes based on mode
                 if is_event_mode and autofill_min_avg_age > 0:
+                    if st.session_state.get('autofill_exact_category', False):
+                        max_age = st.session_state.get('autofill_computed_max_age', 0)
+                        adj_help = f"Find best handicap-adjusted lineup with avg age {autofill_min_avg_age}–{max_age - 1}"
+                    else:
+                        adj_help = f"Find best handicap-adjusted lineup meeting age (≥{autofill_min_avg_age})"
                     autofill_adj_clicked = st.button("⚡ Fill For Category", use_container_width=True,
-                                                      help=f"Find best handicap-adjusted lineup meeting age (≥{autofill_min_avg_age})")
+                                                      help=adj_help)
                 else:
                     autofill_adj_clicked = st.button("⚡ Fill Fastest Adj", use_container_width=True,
                                                       help="Find fastest lineup by handicap-adjusted time")
@@ -5909,15 +5934,24 @@ Clear buttons at the top of each column reset that lineup.
 
             # Hot-seat exclusion controls (only visible when event is selected)
             if is_event_mode:
-                hot_seat_cols = st.columns([1, 1])
+                hot_seat_cols = st.columns([1, 1, 1])
                 with hot_seat_cols[0]:
+                    if autofill_min_avg_age > 0:
+                        max_age = st.session_state.get('autofill_computed_max_age', 0)
+                        st.session_state.setdefault('autofill_exact_category_cb', st.session_state.autofill_exact_category)
+                        st.session_state.autofill_exact_category = st.checkbox(
+                            "🎯 Target exact category",
+                            key="autofill_exact_category_cb",
+                            help=f"Restrict to avg age {autofill_min_avg_age}–{max_age - 1}. When off, allows racing down (≥{autofill_min_avg_age})."
+                        )
+                with hot_seat_cols[1]:
                     st.session_state.exclude_hot_seats = st.checkbox(
                         "🔥 Exclude hot seats",
                         value=st.session_state.exclude_hot_seats,
                         key="exclude_hot_seats_cb",
                         help="Exclude rowers already committed to events within the threshold time of this event"
                     )
-                with hot_seat_cols[1]:
+                with hot_seat_cols[2]:
                     if st.session_state.exclude_hot_seats:
                         st.session_state.hot_seat_threshold = st.number_input(
                             "Threshold (min)",
@@ -5933,6 +5967,7 @@ Clear buttons at the top of each column reset that lineup.
         if autofill_raw_clicked or autofill_adj_clicked:
             # Get min_avg_age from session state (more reliable than local variable)
             effective_min_avg_age = st.session_state.get('autofill_computed_min_age', autofill_min_avg_age)
+            effective_max_avg_age = st.session_state.get('autofill_computed_max_age', 0) if st.session_state.get('autofill_exact_category', False) else 0
 
             # Determine optimization mode
             if autofill_raw_clicked and is_event_mode and effective_min_avg_age > 0:
@@ -6042,6 +6077,7 @@ Clear buttons at the top of each column reset that lineup.
                         optimize_for=optimize_for,
                         gender=effective_gender,
                         min_avg_age=effective_min_avg_age,
+                        max_avg_age=effective_max_avg_age,
                         num_results=1,
                         excluded_rowers=combined_exclusions,
                         locked_rowers=locks_by_slot[slot]
@@ -6061,6 +6097,7 @@ Clear buttons at the top of each column reset that lineup.
                         optimize_for=optimize_for,
                         gender=effective_gender,
                         min_avg_age=effective_min_avg_age,
+                        max_avg_age=effective_max_avg_age,
                         num_results=len(slots_without_locks),
                         excluded_rowers=combined_exclusions,
                         locked_rowers=None
@@ -6087,6 +6124,7 @@ Clear buttons at the top of each column reset that lineup.
                     optimize_for=optimize_for,
                     gender=effective_gender,
                     min_avg_age=effective_min_avg_age,
+                    max_avg_age=effective_max_avg_age,
                     num_results=num_lineups,
                     excluded_rowers=combined_exclusions,
                     locked_rowers=locked_rowers
@@ -6113,18 +6151,28 @@ Clear buttons at the top of each column reset that lineup.
                                   f"but only have {len(males)} men and {len(females)} women with erg scores.")
                     elif effective_min_avg_age > 0:
                         ages = sorted([r.age for r in eligible], reverse=True)
-                        max_avg_age = sum(ages[:num_rowing_seats]) / num_rowing_seats if ages else 0
-                        st.warning(f"Could not find Mixed lineup meeting category min age ({effective_min_avg_age}). "
-                                  f"Max possible avg age: {max_avg_age:.1f}")
+                        max_possible_avg = sum(ages[:num_rowing_seats]) / num_rowing_seats if ages else 0
+                        if effective_max_avg_age > 0:
+                            st.warning(f"Could not find Mixed lineup within exact category range "
+                                      f"(avg {effective_min_avg_age}–{effective_max_avg_age - 1}). "
+                                      f"Try unchecking 'Target exact category' to allow racing down.")
+                        else:
+                            st.warning(f"Could not find Mixed lineup meeting category min age ({effective_min_avg_age}). "
+                                      f"Max possible avg age: {max_possible_avg:.1f}")
                     else:
                         st.warning(f"Could not find valid Mixed lineup from {len(eligible)} eligible rowers "
                                   f"({len(males)} men, {len(females)} women).")
                 elif effective_min_avg_age > 0:
                     # Calculate max possible avg age from eligible rowers
                     ages = sorted([r.age for r in eligible], reverse=True)
-                    max_avg_age = sum(ages[:num_rowing_seats]) / num_rowing_seats if ages else 0
-                    st.warning(f"Could not find lineup meeting category min age ({effective_min_avg_age}). "
-                              f"Max possible avg age from eligible rowers: {max_avg_age:.1f}")
+                    max_possible_avg = sum(ages[:num_rowing_seats]) / num_rowing_seats if ages else 0
+                    if effective_max_avg_age > 0:
+                        st.warning(f"Could not find lineup within exact category range "
+                                  f"(avg {effective_min_avg_age}–{effective_max_avg_age - 1}). "
+                                  f"Try unchecking 'Target exact category' to allow racing down.")
+                    else:
+                        st.warning(f"Could not find lineup meeting category min age ({effective_min_avg_age}). "
+                                  f"Max possible avg age from eligible rowers: {max_possible_avg:.1f}")
                 else:
                     st.warning(f"Could not find valid lineup from {len(eligible)} eligible rowers.")
             else:
