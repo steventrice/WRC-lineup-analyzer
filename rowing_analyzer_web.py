@@ -4962,6 +4962,11 @@ def main():
     if 'cache_version' not in st.session_state:
         st.session_state.cache_version = 0
 
+    # Force one-time cache refresh for Score.test_date / Rower.all_scores schema change
+    if 'erg_date_schema' not in st.session_state:
+        st.cache_resource.clear()
+        st.session_state.erg_date_schema = True
+
     # Load data (pass cache_version to force refresh when incremented)
     roster_manager, error, data_source, load_time = load_data(st.session_state.cache_version)
 
@@ -5827,8 +5832,7 @@ Clear buttons at the top of each column reset that lineup.
                     value=True,
                     help="Only use erg scores from the current year. Turn off to use all-time fastest scores."
                 )
-                if hasattr(roster_manager, 'rebuild_all_scores'):
-                    roster_manager.rebuild_all_scores(current_year_only)
+                roster_manager.rebuild_all_scores(current_year_only)
 
         # =========================================================================
         # AUTOFILL CONTROLS (in expander)
