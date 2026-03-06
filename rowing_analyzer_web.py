@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any, Set
 from pathlib import Path
 import re
+import datetime
 
 # Google Sheets integration
 try:
@@ -75,6 +76,7 @@ class Score:
     split_500m: float
     watts: float
     source_sheet: str
+    test_date: Optional[datetime.date] = None
 
     def format_split(self) -> str:
         mins = int(self.split_500m // 60)
@@ -93,14 +95,30 @@ class Rower:
     side_coxswain: bool = False
     pref_order: str = ""
     scores: Dict[int, 'Score'] = field(default_factory=dict)
+    all_scores: List['Score'] = field(default_factory=list)
     regatta_signups: Dict[str, bool] = field(default_factory=dict)
 
     def add_score(self, score: 'Score'):
         """Add score, keeping best time per distance"""
+        self.all_scores.append(score)
         if score.distance not in self.scores:
             self.scores[score.distance] = score
         elif score.time_seconds < self.scores[score.distance].time_seconds:
             self.scores[score.distance] = score
+
+    def rebuild_scores(self, current_year_only: bool = False):
+        """Rebuild active scores dict from all_scores, optionally filtering to current year"""
+        self.scores = {}
+        current_year = datetime.date.today().year
+        for score in self.all_scores:
+            if current_year_only and score.test_date and score.test_date.year != current_year:
+                continue
+            if current_year_only and score.test_date is None:
+                continue  # Exclude undated scores in current-year mode
+            if score.distance not in self.scores:
+                self.scores[score.distance] = score
+            elif score.time_seconds < self.scores[score.distance].time_seconds:
+                self.scores[score.distance] = score
 
     def get_closest_score(self, target_distance: int) -> Optional['Score']:
         """Get the score closest to target distance for projection"""
@@ -924,6 +942,19 @@ class RosterManager:
     def log(self, msg: str):
         self.load_log.append(msg)
 
+    def rebuild_all_scores(self, current_year_only: bool = False):
+        """Rebuild active scores for all rowers, optionally filtering to current year"""
+        for rower in self.rowers.values():
+            rower.rebuild_scores(current_year_only)
+
+    @staticmethod
+    def _extract_year_from_sheet_name(sheet_name: str) -> Optional[datetime.date]:
+        """Extract a 4-digit year from sheet name and return as Jan 1 of that year"""
+        match = re.search(r'(20\d{2})', sheet_name)
+        if match:
+            return datetime.date(int(match.group(1)), 1, 1)
+        return None
+
     def _build_name_map(self):
         """Build a map of name variations to canonical roster names"""
         self.name_map = {}
@@ -1286,6 +1317,9 @@ class RosterManager:
         """Load scores from a specific score sheet"""
         df = xl.parse(sheet_name)
 
+        # Extract fallback date from sheet name (e.g. "2025 1K" -> Jan 1, 2025)
+        sheet_date = self._extract_year_from_sheet_name(sheet_name)
+
         scores_loaded = 0
         fuzzy_matches = 0
         for _, row in df.iterrows():
@@ -1362,12 +1396,23 @@ class RosterManager:
 
             watts = PhysicsEngine.split_to_watts(split_500m)
 
+            # Determine test date: per-row "Test Date" column > sheet name year > None
+            test_date = sheet_date
+            if 'Test Date' in row.index and pd.notna(row['Test Date']):
+                try:
+                    parsed_date = pd.to_datetime(row['Test Date'], errors='coerce')
+                    if pd.notna(parsed_date):
+                        test_date = parsed_date.date()
+                except Exception:
+                    pass
+
             score = Score(
                 distance=distance,
                 time_seconds=time_seconds,
                 split_500m=split_500m,
                 watts=watts,
-                source_sheet=sheet_name
+                source_sheet=sheet_name,
+                test_date=test_date
             )
 
             rower.add_score(score)
@@ -1392,6 +1437,9 @@ class RosterManager:
         """Load scores from short test sheets (100m, 250m, 2-minute pieces)"""
         df = xl.parse(sheet_name)
         self.log(f"Loading short tests from '{sheet_name}', columns: {list(df.columns)}")
+
+        # Extract fallback date from sheet name
+        sheet_date = self._extract_year_from_sheet_name(sheet_name)
 
         scores_loaded = 0
         fuzzy_matches = 0
@@ -1453,12 +1501,23 @@ class RosterManager:
 
             watts = PhysicsEngine.split_to_watts(split_500m)
 
+            # Determine test date: per-row "Test Date" column > sheet name year > None
+            test_date = sheet_date
+            if 'Test Date' in row.index and pd.notna(row['Test Date']):
+                try:
+                    parsed_date = pd.to_datetime(row['Test Date'], errors='coerce')
+                    if pd.notna(parsed_date):
+                        test_date = parsed_date.date()
+                except Exception:
+                    pass
+
             score = Score(
                 distance=distance,
                 time_seconds=time_seconds,
                 split_500m=split_500m,
                 watts=watts,
-                source_sheet=sheet_name
+                source_sheet=sheet_name,
+                test_date=test_date
             )
 
             rower.add_score(score)
@@ -1473,6 +1532,9 @@ class RosterManager:
         """Load scores from misc maxes sheet with split columns for 100m, 250m, 2' tests"""
         df = xl.parse(sheet_name)
         self.log(f"Loading misc maxes from '{sheet_name}', columns: {list(df.columns)}")
+
+        # Extract fallback date from sheet name (e.g. "2025 Misc Maxes" -> Jan 1, 2025)
+        sheet_date = self._extract_year_from_sheet_name(sheet_name)
 
         # Define test patterns and their distances
         # Use patterns to match various apostrophe characters (', ', ′)
@@ -1541,12 +1603,23 @@ class RosterManager:
 
                 watts = PhysicsEngine.split_to_watts(split_500m)
 
+                # Determine test date: per-row "Test Date" column > sheet name year > None
+                test_date = sheet_date
+                if 'Test Date' in row.index and pd.notna(row['Test Date']):
+                    try:
+                        parsed_date = pd.to_datetime(row['Test Date'], errors='coerce')
+                        if pd.notna(parsed_date):
+                            test_date = parsed_date.date()
+                    except Exception:
+                        pass
+
                 score = Score(
                     distance=distance,
                     time_seconds=time_seconds,
                     split_500m=split_500m,
                     watts=watts,
-                    source_sheet=sheet_name
+                    source_sheet=sheet_name,
+                    test_date=test_date
                 )
 
                 rower.add_score(score)
@@ -5712,9 +5785,9 @@ Clear buttons at the top of each column reset that lineup.
 
     # Lineup mode: show Settings and Autofill expanders
     if st.session_state.view_mode == 'lineup':
-        # Settings expander - Calculation, Predictor, Erg-to-Water
+        # Settings expander - Calculation, Predictor, Erg-to-Water, Current Year Ergs
         with st.expander("⚙️ Settings", expanded=False):
-            settings_col1, settings_col2, settings_col3 = st.columns([1, 1, 1])
+            settings_col1, settings_col2, settings_col3, settings_col4 = st.columns([1, 1, 1, 1])
             with settings_col1:
                 calc_method = st.radio(
                     "Calculation",
@@ -5747,6 +5820,14 @@ Clear buttons at the top of each column reset that lineup.
 
 **Boat Factors**: 8+ (0.93) | 4x (0.96) | 4- (1.00) | 4+/2x (1.04) | 2- (1.08) | 1x (1.16)"""
                 )
+
+            with settings_col4:
+                current_year_only = st.toggle(
+                    "Current Year Ergs",
+                    value=True,
+                    help="Only use erg scores from the current year. Turn off to use all-time fastest scores."
+                )
+                roster_manager.rebuild_all_scores(current_year_only)
 
         # =========================================================================
         # AUTOFILL CONTROLS (in expander)
