@@ -1731,12 +1731,6 @@ class RosterManager:
                     self.regatta_events[key] = []
                 self.regatta_events[key].append(event)
                 events_loaded += 1
-            else:
-                # Row didn't match any pattern — log for debugging
-                if current_regatta:
-                    self.log(f"  SKIPPED row {idx}: A='{str_a}' B='{str_b}' C='{str_c}' "
-                             f"is_number={is_number} has_time={has_time_pattern} "
-                             f"regatta='{current_regatta}' day='{current_day}'")
 
         self.log(f"Loaded {events_loaded} regatta events from {len(self.regatta_events)} regatta/day combinations")
         if self.regatta_events:
@@ -3578,10 +3572,10 @@ def reconcile_entry_events(entries: List[dict], regatta_events: dict) -> tuple:
     Matches by (regatta, day, event_name) since event_name is the stable identity.
     Updates event_number and event_time when they've changed.
 
-    Returns: (entries, changed_entries, orphaned_entries, event_lookup)
+    Returns: (entries, changed_entries, orphaned_entries)
     """
     if not entries or not regatta_events:
-        return entries, [], [], {}
+        return entries, [], []
 
     # Build lookup: (regatta_lower, normalized_day_lower, event_name_lower) -> RegattaEvent
     # Also track which regatta names have events loaded (for orphan detection)
@@ -3640,7 +3634,7 @@ def reconcile_entry_events(entries: List[dict], regatta_events: dict) -> tuple:
         else:
             orphaned.append(entry)
 
-    return entries, changed, orphaned, event_lookup
+    return entries, changed, orphaned
 
 
 def batch_update_entries_in_gsheet(changed_entries: List[dict]):
@@ -3681,42 +3675,19 @@ def batch_update_entries_in_gsheet(changed_entries: List[dict]):
         pass
 
 
-def load_and_reconcile_entries(regatta_events: dict, roster_manager=None) -> List[dict]:
+def load_and_reconcile_entries(regatta_events: dict) -> List[dict]:
     """Load entries from Google Sheet and reconcile against current RegattaEvent data."""
     entries = load_entries_from_gsheet()
     if entries and regatta_events:
-        entries, changed, orphaned, event_lookup = reconcile_entry_events(entries, regatta_events)
+        entries, changed, orphaned = reconcile_entry_events(entries, regatta_events)
         if changed:
             st.toast(f"Updated schedule data for {len(changed)} {'entry' if len(changed) == 1 else 'entries'}")
             batch_update_entries_in_gsheet(changed)
         if orphaned:
-            # Debug: show which events actually loaded for the orphaned entry's regatta/day
-            debug_lines = []
-            shown_keys = set()
-            for e in orphaned[:3]:
-                e_regatta = e['regatta'].lower().strip()
-                e_day_norm = normalize_day_format(e['day']).lower().strip()
-                for rkey, revents in regatta_events.items():
-                    rkey_regatta = rkey.split('|')[0].lower().strip()
-                    rkey_day = normalize_day_format(rkey.split('|')[1]).lower().strip() if '|' in rkey else ''
-                    if rkey_day == e_day_norm and (e_regatta in rkey_regatta or rkey_regatta in e_regatta):
-                        if rkey not in shown_keys:
-                            loaded = [(ev.event_number, ev.event_name) for ev in revents]
-                            debug_lines.append(f"Loaded for \"{rkey}\": {loaded}")
-                            shown_keys.add(rkey)
-                debug_lines.append(f"Missing: #{e['event_number']} \"{e['event_name']}\"")
-            # Show skipped rows from load log
-            if roster_manager:
-                skipped = [l for l in roster_manager.load_log if 'SKIPPED' in l]
-                if skipped:
-                    debug_lines.append("")
-                    debug_lines.append(f"Parser skipped {len(skipped)} rows:")
-                    for s in skipped[:10]:
-                        debug_lines.append(s.strip())
             st.warning(
                 f"{len(orphaned)} {'entry has' if len(orphaned) == 1 else 'entries have'} "
-                f"no matching event:\n\n"
-                + "\n".join(debug_lines)
+                f"no matching event (schedule may have changed): "
+                + ", ".join(f"Event {e['event_number']} ({e['event_name']})" for e in orphaned[:5])
             )
     return entries
 
@@ -5179,7 +5150,7 @@ def main():
 
     # Initialize event entries list - load from Google Sheets if available
     if 'event_entries' not in st.session_state:
-        st.session_state.event_entries = load_and_reconcile_entries(roster_manager.regatta_events, roster_manager)
+        st.session_state.event_entries = load_and_reconcile_entries(roster_manager.regatta_events)
         if st.session_state.event_entries:
             st.toast(f"Loaded {len(st.session_state.event_entries)} event entries")
 
@@ -5508,7 +5479,7 @@ Clear buttons at the top of each column reset that lineup.
         with dashboard_cols[1]:
             if st.button("Reload", type="secondary", use_container_width=True, help="Reload data from Google Sheets"):
                 st.session_state.cache_version += 1
-                st.session_state.event_entries = load_and_reconcile_entries(roster_manager.regatta_events, roster_manager)
+                st.session_state.event_entries = load_and_reconcile_entries(roster_manager.regatta_events)
                 st.rerun()
 
     # Store in session state for persistence across view toggles
@@ -5638,7 +5609,7 @@ Clear buttons at the top of each column reset that lineup.
             if st.button("Reload", type="secondary", use_container_width=True, help=f"Reload data from Google Sheets"):
                 st.session_state.cache_version += 1
                 # Also reload event entries
-                st.session_state.event_entries = load_and_reconcile_entries(roster_manager.regatta_events, roster_manager)
+                st.session_state.event_entries = load_and_reconcile_entries(roster_manager.regatta_events)
                 st.rerun()
     else:
         # Dashboard mode: use defaults
