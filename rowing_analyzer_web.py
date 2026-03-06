@@ -3575,13 +3575,16 @@ def reconcile_entry_events(entries: List[dict], regatta_events: dict) -> tuple:
         return entries, [], []
 
     # Build lookup: (regatta_lower, normalized_day_lower, event_name_lower) -> RegattaEvent
+    # Also track which regatta names have events loaded (for orphan detection)
     event_lookup = {}
+    known_regattas = set()
     for key, events_list in regatta_events.items():
         for event in events_list:
             regatta_lower = event.regatta.lower().strip()
             day_lower = normalize_day_format(event.day).lower().strip()
             name_lower = event.event_name.lower().strip()
             event_lookup[(regatta_lower, day_lower, name_lower)] = event
+            known_regattas.add(regatta_lower)
 
     changed = []
     orphaned = []
@@ -3590,6 +3593,14 @@ def reconcile_entry_events(entries: List[dict], regatta_events: dict) -> tuple:
         entry_regatta = entry['regatta'].lower().strip()
         entry_day = normalize_day_format(entry['day']).lower().strip()
         entry_name = entry['event_name'].lower().strip()
+
+        # Skip entries whose regatta has no events loaded — nothing to reconcile against
+        regatta_has_events = any(
+            entry_regatta == r or entry_regatta in r or r in entry_regatta
+            for r in known_regattas
+        )
+        if not regatta_has_events:
+            continue
 
         # Try exact match first
         matched_event = event_lookup.get((entry_regatta, entry_day, entry_name))
@@ -3670,10 +3681,24 @@ def load_and_reconcile_entries(regatta_events: dict) -> List[dict]:
             st.toast(f"Updated schedule data for {len(changed)} {'entry' if len(changed) == 1 else 'entries'}")
             batch_update_entries_in_gsheet(changed)
         if orphaned:
+            # Debug: show what we tried to match vs what exists
+            debug_lines = []
+            for e in orphaned[:5]:
+                e_regatta = e['regatta'].lower().strip()
+                e_day = normalize_day_format(e['day']).lower().strip()
+                e_name = e['event_name'].lower().strip()
+                debug_lines.append(f"Event {e['event_number']} \"{e['event_name']}\" (day: {e['day']})")
+                # Show what event names exist for this regatta/day
+                available = [n for (r, d, n), _ in event_lookup.items()
+                             if d == e_day and (r == e_regatta or r in e_regatta or e_regatta in r)]
+                if available:
+                    debug_lines.append(f"  ↳ Available names for that day: {available[:5]}")
+                else:
+                    debug_lines.append(f"  ↳ No events found for regatta=\"{e['regatta']}\" day=\"{e['day']}\"")
             st.warning(
                 f"{len(orphaned)} {'entry has' if len(orphaned) == 1 else 'entries have'} "
-                f"no matching event (schedule may have changed): "
-                + ", ".join(f"Event {e['event_number']} ({e['event_name']})" for e in orphaned[:5])
+                f"no matching event (schedule may have changed):\n\n"
+                + "\n".join(debug_lines)
             )
     return entries
 
