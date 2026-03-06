@@ -3683,18 +3683,15 @@ def load_and_reconcile_entries(regatta_events: dict) -> List[dict]:
         if orphaned:
             # Debug: show what we tried to match vs what exists
             debug_lines = []
-            for e in orphaned[:5]:
+            for e in orphaned[:3]:
                 e_regatta = e['regatta'].lower().strip()
                 e_day = normalize_day_format(e['day']).lower().strip()
                 e_name = e['event_name'].lower().strip()
-                debug_lines.append(f"Event {e['event_number']} \"{e['event_name']}\" (day: {e['day']})")
-                # Show what event names exist for this regatta/day
+                debug_lines.append(f"Entry lookup key: regatta=\"{e_regatta}\" day=\"{e_day}\" name=\"{e_name}\"")
+                # Show ALL event names for this regatta/day
                 available = [n for (r, d, n), _ in event_lookup.items()
                              if d == e_day and (r == e_regatta or r in e_regatta or e_regatta in r)]
-                if available:
-                    debug_lines.append(f"  ↳ Available names for that day: {available[:5]}")
-                else:
-                    debug_lines.append(f"  ↳ No events found for regatta=\"{e['regatta']}\" day=\"{e['day']}\"")
+                debug_lines.append(f"  ↳ {len(available)} events for that day: {available}")
             st.warning(
                 f"{len(orphaned)} {'entry has' if len(orphaned) == 1 else 'entries have'} "
                 f"no matching event (schedule may have changed):\n\n"
