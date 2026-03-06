@@ -5827,7 +5827,8 @@ Clear buttons at the top of each column reset that lineup.
                     value=True,
                     help="Only use erg scores from the current year. Turn off to use all-time fastest scores."
                 )
-                roster_manager.rebuild_all_scores(current_year_only)
+                if hasattr(roster_manager, 'rebuild_all_scores'):
+                    roster_manager.rebuild_all_scores(current_year_only)
 
         # =========================================================================
         # AUTOFILL CONTROLS (in expander)
