@@ -3681,20 +3681,21 @@ def load_and_reconcile_entries(regatta_events: dict) -> List[dict]:
             st.toast(f"Updated schedule data for {len(changed)} {'entry' if len(changed) == 1 else 'entries'}")
             batch_update_entries_in_gsheet(changed)
         if orphaned:
-            # Debug: show what we tried to match vs what exists
-            debug_lines = []
+            # Debug: show loaded event counts per regatta/day key
+            key_summary = {k: len(v) for k, v in regatta_events.items()}
+            debug_lines = [f"Loaded events by key: {key_summary}", ""]
             for e in orphaned[:3]:
                 e_regatta = e['regatta'].lower().strip()
                 e_day = normalize_day_format(e['day']).lower().strip()
                 e_name = e['event_name'].lower().strip()
-                debug_lines.append(f"Entry lookup key: regatta=\"{e_regatta}\" day=\"{e_day}\" name=\"{e_name}\"")
+                debug_lines.append(f"Entry: \"{e['event_name']}\" lookup=({e_regatta}, {e_day}, {e_name})")
                 # Show ALL event names for this regatta/day
                 available = [n for (r, d, n), _ in event_lookup.items()
                              if d == e_day and (r == e_regatta or r in e_regatta or e_regatta in r)]
                 debug_lines.append(f"  ↳ {len(available)} events for that day: {available}")
             st.warning(
                 f"{len(orphaned)} {'entry has' if len(orphaned) == 1 else 'entries have'} "
-                f"no matching event (schedule may have changed):\n\n"
+                f"no matching event:\n\n"
                 + "\n".join(debug_lines)
             )
     return entries
