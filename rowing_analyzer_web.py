@@ -1708,6 +1708,12 @@ class RosterManager:
 
                 event_time = str_b
                 event_name = str_c
+            else:
+                # Row didn't match any pattern — log for debugging
+                self.log(f"  SKIPPED row {idx}: A='{str_a}' B='{str_b}' C='{str_c}' "
+                         f"is_number={is_number} has_time={has_time_pattern} "
+                         f"regatta='{current_regatta}' day='{current_day}'")
+                continue
 
                 # Parse Include and Priority booleans
                 include = parse_bool(col_d, default=False)
@@ -3672,7 +3678,7 @@ def batch_update_entries_in_gsheet(changed_entries: List[dict]):
         pass
 
 
-def load_and_reconcile_entries(regatta_events: dict) -> List[dict]:
+def load_and_reconcile_entries(regatta_events: dict, roster_manager=None) -> List[dict]:
     """Load entries from Google Sheet and reconcile against current RegattaEvent data."""
     entries = load_entries_from_gsheet()
     if entries and regatta_events:
@@ -3696,6 +3702,14 @@ def load_and_reconcile_entries(regatta_events: dict) -> List[dict]:
                             debug_lines.append(f"Loaded for \"{rkey}\": {loaded}")
                             shown_keys.add(rkey)
                 debug_lines.append(f"Missing: #{e['event_number']} \"{e['event_name']}\"")
+            # Show skipped rows from load log
+            if roster_manager:
+                skipped = [l for l in roster_manager.load_log if 'SKIPPED' in l]
+                if skipped:
+                    debug_lines.append("")
+                    debug_lines.append(f"Parser skipped {len(skipped)} rows:")
+                    for s in skipped[:10]:
+                        debug_lines.append(s.strip())
             st.warning(
                 f"{len(orphaned)} {'entry has' if len(orphaned) == 1 else 'entries have'} "
                 f"no matching event:\n\n"
@@ -5162,7 +5176,7 @@ def main():
 
     # Initialize event entries list - load from Google Sheets if available
     if 'event_entries' not in st.session_state:
-        st.session_state.event_entries = load_and_reconcile_entries(roster_manager.regatta_events)
+        st.session_state.event_entries = load_and_reconcile_entries(roster_manager.regatta_events, roster_manager)
         if st.session_state.event_entries:
             st.toast(f"Loaded {len(st.session_state.event_entries)} event entries")
 
@@ -5491,7 +5505,7 @@ Clear buttons at the top of each column reset that lineup.
         with dashboard_cols[1]:
             if st.button("Reload", type="secondary", use_container_width=True, help="Reload data from Google Sheets"):
                 st.session_state.cache_version += 1
-                st.session_state.event_entries = load_and_reconcile_entries(roster_manager.regatta_events)
+                st.session_state.event_entries = load_and_reconcile_entries(roster_manager.regatta_events, roster_manager)
                 st.rerun()
 
     # Store in session state for persistence across view toggles
@@ -5621,7 +5635,7 @@ Clear buttons at the top of each column reset that lineup.
             if st.button("Reload", type="secondary", use_container_width=True, help=f"Reload data from Google Sheets"):
                 st.session_state.cache_version += 1
                 # Also reload event entries
-                st.session_state.event_entries = load_and_reconcile_entries(roster_manager.regatta_events)
+                st.session_state.event_entries = load_and_reconcile_entries(roster_manager.regatta_events, roster_manager)
                 st.rerun()
     else:
         # Dashboard mode: use defaults
