@@ -3563,6 +3563,121 @@ def update_entry_in_gsheet(original_entry: dict, updated_entry: dict) -> bool:
         return False
 
 
+def reconcile_entry_events(entries: List[dict], regatta_events: dict) -> tuple:
+    """Reconcile saved entries against current RegattaEvent data.
+
+    Matches by (regatta, day, event_name) since event_name is the stable identity.
+    Updates event_number and event_time when they've changed.
+
+    Returns: (entries, changed_entries, orphaned_entries)
+    """
+    if not entries or not regatta_events:
+        return entries, [], []
+
+    # Build lookup: (regatta_lower, normalized_day_lower, event_name_lower) -> RegattaEvent
+    event_lookup = {}
+    for key, events_list in regatta_events.items():
+        for event in events_list:
+            regatta_lower = event.regatta.lower().strip()
+            day_lower = normalize_day_format(event.day).lower().strip()
+            name_lower = event.event_name.lower().strip()
+            event_lookup[(regatta_lower, day_lower, name_lower)] = event
+
+    changed = []
+    orphaned = []
+
+    for entry in entries:
+        entry_regatta = entry['regatta'].lower().strip()
+        entry_day = normalize_day_format(entry['day']).lower().strip()
+        entry_name = entry['event_name'].lower().strip()
+
+        # Try exact match first
+        matched_event = event_lookup.get((entry_regatta, entry_day, entry_name))
+
+        # Try fuzzy regatta matching (partial containment)
+        if matched_event is None:
+            for (r, d, n), evt in event_lookup.items():
+                if d == entry_day and n == entry_name:
+                    if entry_regatta in r or r in entry_regatta:
+                        matched_event = evt
+                        break
+
+        if matched_event is not None:
+            # Check if event_number or event_time changed
+            updated = False
+            if entry['event_number'] != matched_event.event_number:
+                entry['event_number'] = matched_event.event_number
+                updated = True
+            if entry['event_time'] != matched_event.event_time:
+                entry['event_time'] = matched_event.event_time
+                updated = True
+            # Sync event_name in case of minor formatting changes
+            if entry['event_name'] != matched_event.event_name:
+                entry['event_name'] = matched_event.event_name
+                updated = True
+            if updated:
+                changed.append(entry)
+        else:
+            orphaned.append(entry)
+
+    return entries, changed, orphaned
+
+
+def batch_update_entries_in_gsheet(changed_entries: List[dict]):
+    """Batch-update event_number, event_name, and event_time for changed entries.
+
+    Uses row_number stored in each entry dict to locate the row.
+    Columns: C=Event Number, D=Event Name, E=Event Time (1-indexed).
+    """
+    _, worksheet = get_entries_gsheet_client()
+    if not worksheet:
+        return
+
+    try:
+        cells_to_update = []
+        for entry in changed_entries:
+            row = entry.get('row_number')
+            if not row:
+                continue
+            # C=3 (Event Number), D=4 (Event Name), E=5 (Event Time)
+            cells_to_update.append({
+                'range': f'C{row}',
+                'values': [[entry['event_number']]]
+            })
+            cells_to_update.append({
+                'range': f'D{row}',
+                'values': [[entry['event_name']]]
+            })
+            normalized_time = normalize_time_format(entry['event_time'])
+            cells_to_update.append({
+                'range': f'E{row}',
+                'values': [[normalized_time]]
+            })
+
+        if cells_to_update:
+            worksheet.batch_update(cells_to_update, value_input_option='USER_ENTERED')
+    except Exception:
+        # Silently fail - in-memory reconciliation still works for current session
+        pass
+
+
+def load_and_reconcile_entries(regatta_events: dict) -> List[dict]:
+    """Load entries from Google Sheet and reconcile against current RegattaEvent data."""
+    entries = load_entries_from_gsheet()
+    if entries and regatta_events:
+        entries, changed, orphaned = reconcile_entry_events(entries, regatta_events)
+        if changed:
+            st.toast(f"Updated schedule data for {len(changed)} {'entry' if len(changed) == 1 else 'entries'}")
+            batch_update_entries_in_gsheet(changed)
+        if orphaned:
+            st.warning(
+                f"{len(orphaned)} {'entry has' if len(orphaned) == 1 else 'entries have'} "
+                f"no matching event (schedule may have changed): "
+                + ", ".join(f"Event {e['event_number']} ({e['event_name']})" for e in orphaned[:5])
+            )
+    return entries
+
+
 def cleanup_entry_names_in_gsheet() -> int:
     """One-time cleanup: fix cox parentheses format in all entries.
 
@@ -5021,7 +5136,7 @@ def main():
 
     # Initialize event entries list - load from Google Sheets if available
     if 'event_entries' not in st.session_state:
-        st.session_state.event_entries = load_entries_from_gsheet()
+        st.session_state.event_entries = load_and_reconcile_entries(roster_manager.regatta_events)
         if st.session_state.event_entries:
             st.toast(f"Loaded {len(st.session_state.event_entries)} event entries")
 
@@ -5350,7 +5465,7 @@ Clear buttons at the top of each column reset that lineup.
         with dashboard_cols[1]:
             if st.button("Reload", type="secondary", use_container_width=True, help="Reload data from Google Sheets"):
                 st.session_state.cache_version += 1
-                st.session_state.event_entries = load_entries_from_gsheet()
+                st.session_state.event_entries = load_and_reconcile_entries(roster_manager.regatta_events)
                 st.rerun()
 
     # Store in session state for persistence across view toggles
@@ -5480,7 +5595,7 @@ Clear buttons at the top of each column reset that lineup.
             if st.button("Reload", type="secondary", use_container_width=True, help=f"Reload data from Google Sheets"):
                 st.session_state.cache_version += 1
                 # Also reload event entries
-                st.session_state.event_entries = load_entries_from_gsheet()
+                st.session_state.event_entries = load_and_reconcile_entries(roster_manager.regatta_events)
                 st.rerun()
     else:
         # Dashboard mode: use defaults
@@ -5530,18 +5645,22 @@ Clear buttons at the top of each column reset that lineup.
 
         # Helper to check if entry matches event (handles format differences)
         def entry_matches_event(entry: dict, event) -> bool:
-            if entry['event_number'] != event.event_number:
-                return False
             # Normalize day comparison
             if normalize_day(entry['day']) != normalize_day(event.day):
                 return False
             # Check regatta - exact match or partial match
             entry_regatta = entry['regatta'].lower()
             event_regatta = event.regatta.lower()
-            if entry_regatta == event_regatta:
+            regatta_match = (entry_regatta == event_regatta or
+                             entry_regatta in event_regatta or
+                             event_regatta in entry_regatta)
+            if not regatta_match:
+                return False
+            # Primary match: event_number
+            if entry['event_number'] == event.event_number:
                 return True
-            # Partial match - one contains the other
-            if entry_regatta in event_regatta or event_regatta in entry_regatta:
+            # Fallback match: event_name (handles window between schedule change and reconciliation)
+            if entry['event_name'].lower().strip() == event.event_name.lower().strip():
                 return True
             return False
 
