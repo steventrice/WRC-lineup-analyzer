@@ -1669,7 +1669,8 @@ class RosterManager:
 
             # Check if this is a regatta name row (text in A, nothing meaningful in B/C)
             # Regatta names don't start with a number and don't have event times
-            is_number = str_a.replace('.', '').isdigit()
+            # Event numbers can have letter suffixes for split heats (e.g., "48A", "53B")
+            is_number = bool(re.match(r'^\d+\.?\d*[A-Za-z]?$', str_a))
             has_time_pattern = bool(re.search(r'\d{1,2}:\d{2}', str_b))
             # Day can be text like "Sunday, March 8, 2026" OR a date value like "2026-03-08 00:00:00"
             has_day_pattern = bool(re.search(r'(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday)', str_a, re.IGNORECASE))
@@ -1702,8 +1703,10 @@ class RosterManager:
             elif is_number and current_regatta and current_day:
                 # This is an event row
                 try:
-                    event_number = int(float(str_a))
-                except ValueError:
+                    # Strip letter suffix from split heats (e.g., "48A" -> 48)
+                    numeric_part = re.match(r'^(\d+)', str_a).group(1)
+                    event_number = int(numeric_part)
+                except (ValueError, AttributeError):
                     continue
 
                 event_time = str_b
