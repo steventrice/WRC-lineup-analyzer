@@ -5808,7 +5808,7 @@ Clear buttons at the top of each column reset that lineup.
                     # Edit/delete using popover for each entry
                     for idx, entry in enumerate(event_entries):
                         with st.popover("···"):
-                            if st.button("✏️ Edit", key=f"edit_{event.event_number}_{idx}", use_container_width=True):
+                            if st.button("✏️ Edit", key=f"edit_{event.event_number}_{ev_idx}_{idx}", use_container_width=True):
                                 entry_boat = entry.get('boat_class', '4+')
                                 entry_rowers = entry.get('rowers', [])
                                 is_coxed_btn = '+' in entry_boat
@@ -5831,7 +5831,7 @@ Clear buttons at the top of each column reset that lineup.
                                 st.session_state.view_mode = 'lineup'
                                 st.toast(f"Editing entry for {event.event_name}")
                                 st.rerun()
-                            if st.button("🗑️ Delete", key=f"del_{event.event_number}_{idx}", use_container_width=True):
+                            if st.button("🗑️ Delete", key=f"del_{event.event_number}_{ev_idx}_{idx}", use_container_width=True):
                                 if delete_entry_from_gsheet(entry):
                                     st.toast("Entry removed")
                                 st.session_state.event_entries.remove(entry)
@@ -7320,8 +7320,8 @@ Clear buttons at the top of each column reset that lineup.
                         if available_to_enter:
                             with st.popover("Race This Lineup", use_container_width=True):
                                 st.markdown("**Select event:**")
-                                for event in available_to_enter:
-                                    btn_key = f"race_{key}_{event.event_number}"
+                                for race_idx, event in enumerate(available_to_enter):
+                                    btn_key = f"race_{key}_{event.event_number}_{race_idx}"
                                     short_name = event.event_name[:25] + "..." if len(event.event_name) > 25 else event.event_name
                                     btn_label = f"{format_event_time(event.event_time)} {short_name}"
 
