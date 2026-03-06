@@ -1708,12 +1708,6 @@ class RosterManager:
 
                 event_time = str_b
                 event_name = str_c
-            else:
-                # Row didn't match any pattern — log for debugging
-                self.log(f"  SKIPPED row {idx}: A='{str_a}' B='{str_b}' C='{str_c}' "
-                         f"is_number={is_number} has_time={has_time_pattern} "
-                         f"regatta='{current_regatta}' day='{current_day}'")
-                continue
 
                 # Parse Include and Priority booleans
                 include = parse_bool(col_d, default=False)
@@ -1734,6 +1728,12 @@ class RosterManager:
                     self.regatta_events[key] = []
                 self.regatta_events[key].append(event)
                 events_loaded += 1
+            else:
+                # Row didn't match any pattern — log for debugging
+                if current_regatta:
+                    self.log(f"  SKIPPED row {idx}: A='{str_a}' B='{str_b}' C='{str_c}' "
+                             f"is_number={is_number} has_time={has_time_pattern} "
+                             f"regatta='{current_regatta}' day='{current_day}'")
 
         self.log(f"Loaded {events_loaded} regatta events from {len(self.regatta_events)} regatta/day combinations")
         if self.regatta_events:
