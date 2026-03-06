@@ -5740,7 +5740,7 @@ Clear buttons at the top of each column reset that lineup.
         st.markdown("<hr style='margin: 0; border-color: #444;'>", unsafe_allow_html=True)
 
         # Event rows
-        for event in display_events:
+        for ev_idx, event in enumerate(display_events):
             event_entries = [e for e in st.session_state.event_entries if entry_matches_event(e, event)]
             entry_count = len(event_entries)
             is_selected = st.session_state.autofill_selected_event == event.event_number
@@ -5754,7 +5754,7 @@ Clear buttons at the top of each column reset that lineup.
 
             with cols[0]:
                 btn_label = "✓" if is_selected else "⚡"
-                if st.button(btn_label, key=f"sel_{event.event_number}", help="Select for autofill"):
+                if st.button(btn_label, key=f"sel_{event.event_number}_{ev_idx}", help="Select for autofill"):
                     if is_selected:
                         st.session_state.autofill_selected_event = None
                     else:
