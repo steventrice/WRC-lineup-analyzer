@@ -3569,10 +3569,10 @@ def reconcile_entry_events(entries: List[dict], regatta_events: dict) -> tuple:
     Matches by (regatta, day, event_name) since event_name is the stable identity.
     Updates event_number and event_time when they've changed.
 
-    Returns: (entries, changed_entries, orphaned_entries)
+    Returns: (entries, changed_entries, orphaned_entries, event_lookup)
     """
     if not entries or not regatta_events:
-        return entries, [], []
+        return entries, [], [], {}
 
     # Build lookup: (regatta_lower, normalized_day_lower, event_name_lower) -> RegattaEvent
     # Also track which regatta names have events loaded (for orphan detection)
@@ -3631,7 +3631,7 @@ def reconcile_entry_events(entries: List[dict], regatta_events: dict) -> tuple:
         else:
             orphaned.append(entry)
 
-    return entries, changed, orphaned
+    return entries, changed, orphaned, event_lookup
 
 
 def batch_update_entries_in_gsheet(changed_entries: List[dict]):
@@ -3676,7 +3676,7 @@ def load_and_reconcile_entries(regatta_events: dict) -> List[dict]:
     """Load entries from Google Sheet and reconcile against current RegattaEvent data."""
     entries = load_entries_from_gsheet()
     if entries and regatta_events:
-        entries, changed, orphaned = reconcile_entry_events(entries, regatta_events)
+        entries, changed, orphaned, event_lookup = reconcile_entry_events(entries, regatta_events)
         if changed:
             st.toast(f"Updated schedule data for {len(changed)} {'entry' if len(changed) == 1 else 'entries'}")
             batch_update_entries_in_gsheet(changed)
