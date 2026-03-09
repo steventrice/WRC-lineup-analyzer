@@ -6737,7 +6737,7 @@ Clear buttons at the top of each column reset that lineup.
             btn_type = "primary" if is_selected else "secondary"
 
             # Use columns for button and exclude toggle (only when autofill controls enabled)
-            if has_scores and show_autofill_ui:
+            if show_autofill_ui:
                 roster_cols = st.columns([6, 1], vertical_alignment="center")
                 with roster_cols[0]:
                     if st.button(display_text, key=f"rower_{name}", use_container_width=True, type=btn_type):
@@ -6761,7 +6761,7 @@ Clear buttons at the top of each column reset that lineup.
                             st.session_state.excluded_rowers.discard(name)
                         st.rerun()
             else:
-                if st.button(display_text, key=f"rower_{name}", use_container_width=True, type=btn_type, disabled=not has_scores):
+                if st.button(display_text, key=f"rower_{name}", use_container_width=True, type=btn_type):
                     if is_selected:
                         st.session_state.selected_rower = None
                     else:
@@ -6796,7 +6796,7 @@ Clear buttons at the top of each column reset that lineup.
             btn_type = "primary" if is_selected else "secondary"
 
             # Use columns for button and exclude toggle (only when autofill controls enabled)
-            if has_scores and show_autofill_ui:
+            if show_autofill_ui:
                 roster_cols = st.columns([6, 1], vertical_alignment="center")
                 with roster_cols[0]:
                     if st.button(display_text, key=f"rower_{name}", use_container_width=True, type=btn_type):
@@ -6820,7 +6820,7 @@ Clear buttons at the top of each column reset that lineup.
                             st.session_state.excluded_rowers.discard(name)
                         st.rerun()
             else:
-                if st.button(display_text, key=f"rower_{name}", use_container_width=True, type=btn_type, disabled=not has_scores):
+                if st.button(display_text, key=f"rower_{name}", use_container_width=True, type=btn_type):
                     if is_selected:
                         st.session_state.selected_rower = None
                     else:
