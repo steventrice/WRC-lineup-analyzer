@@ -5478,6 +5478,7 @@ Clear buttons at the top of each column reset that lineup.
             )
         with dashboard_cols[1]:
             if st.button("Reload", type="secondary", use_container_width=True, help="Reload data from Google Sheets"):
+                st.cache_resource.clear()
                 st.session_state.cache_version += 1
                 st.session_state.event_entries = load_and_reconcile_entries(roster_manager.regatta_events)
                 st.rerun()
@@ -5607,6 +5608,7 @@ Clear buttons at the top of each column reset that lineup.
 
         with control_cols[4]:
             if st.button("Reload", type="secondary", use_container_width=True, help=f"Reload data from Google Sheets"):
+                st.cache_resource.clear()
                 st.session_state.cache_version += 1
                 # Also reload event entries
                 st.session_state.event_entries = load_and_reconcile_entries(roster_manager.regatta_events)
