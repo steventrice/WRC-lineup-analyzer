@@ -3904,6 +3904,10 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
     # Get entries for selected regatta (with partial matching)
     regatta_name = selected_regatta.split("|")[0] if "|" in selected_regatta else selected_regatta
     regatta_lower = regatta_name.lower()
+    # Extract day filter if present (e.g., "NW Regionals|Saturday, June 21, 2025")
+    day_filter = None
+    if "|" in selected_regatta:
+        day_filter = selected_regatta.split("|", 1)[1].split(",")[0].split()[0].strip().lower()
 
     dashboard_entries = []
     for entry in st.session_state.event_entries:
@@ -3911,6 +3915,12 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
         if (entry_regatta == regatta_lower or
             entry_regatta in regatta_lower or
             regatta_lower in entry_regatta):
+            # If day filter is active, only include entries for that day
+            if day_filter:
+                entry_day = entry.get('day', '')
+                entry_day_name = entry_day.split(",")[0].split()[0].strip().lower() if entry_day else ''
+                if entry_day_name != day_filter:
+                    continue
             dashboard_entries.append(entry)
 
     # Helper to parse event time for sorting
