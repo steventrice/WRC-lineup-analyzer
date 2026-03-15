@@ -3376,7 +3376,9 @@ def parse_lineup_string(lineup_str: str, boat_class: str) -> List[str]:
             remainder = part[11:]  # len("(needs cox)") = 11
             if remainder:
                 cleaned_parts.append(remainder)
-            # else: skip empty string
+            else:
+                # Keep standalone "(needs cox)" so cox detection code handles it
+                cleaned_parts.append(part)
         else:
             cleaned_parts.append(part)
     parts = cleaned_parts
