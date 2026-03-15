@@ -6515,17 +6515,18 @@ Clear buttons at the top of each column reset that lineup.
             secondary_sort = secondary_sort_options[secondary_sort]
 
         # Helper to count events entered for a rower in selected regatta
-        def count_events_entered(rower_name: str) -> int:
+        # Returns (count, has_conflict) where has_conflict means rower is in 2+ entries for same event
+        def count_events_entered(rower_name: str) -> tuple:
             try:
                 if not has_events:
-                    return 0
+                    return 0, False
                 regatta_name = selected_regatta.split("|")[0] if "|" in selected_regatta else selected_regatta
                 regatta_lower = regatta_name.lower()
                 # Extract day filter if present (e.g., "NW Regionals|Saturday, June 21, 2025")
                 day_filter = None
                 if "|" in selected_regatta:
                     day_filter = selected_regatta.split("|", 1)[1].split(",")[0].split()[0].strip().lower()
-                count = 0
+                event_numbers = []
                 for entry in st.session_state.event_entries:
                     entry_regatta = entry['regatta'].lower()
                     # Match if exact or partial match (one contains the other)
@@ -6542,11 +6543,12 @@ Clear buttons at the top of each column reset that lineup.
                     if not isinstance(rowers_list, list):
                         rowers_list = []
                     if regatta_match and is_name_in_list(rower_name, rowers_list):
-                        count += 1
-                return count
+                        event_numbers.append(entry.get('event_number'))
+                has_conflict = len(event_numbers) != len(set(event_numbers))
+                return len(event_numbers), has_conflict
             except Exception as e:
                 st.error(f"Error in count_events_entered: {e}")
-                return 0
+                return 0, False
 
         # Search filter
         search_term = st.text_input("Search", key="search")
@@ -6688,9 +6690,9 @@ Clear buttons at the top of each column reset that lineup.
 
         # Apply secondary sort by events entered
         if secondary_sort == 'events_desc':
-            rowers_list.sort(key=lambda x: count_events_entered(x[0]), reverse=True)
+            rowers_list.sort(key=lambda x: count_events_entered(x[0])[0], reverse=True)
         elif secondary_sort == 'events_asc':
-            rowers_list.sort(key=lambda x: count_events_entered(x[0]))
+            rowers_list.sort(key=lambda x: count_events_entered(x[0])[0])
 
         # Apply search filter
         if search_term:
@@ -6716,7 +6718,9 @@ Clear buttons at the top of each column reset that lineup.
             return f"{time_str}*" if is_projected else time_str
 
         # Helper to format event count with color indicator
-        def format_event_indicator(count: int) -> str:
+        def format_event_indicator(count: int, has_conflict: bool = False) -> str:
+            if has_conflict:
+                return f"🔴{count}"
             if count == 0:
                 return "⚪0"
             elif count <= 2:
@@ -6737,8 +6741,8 @@ Clear buttons at the top of each column reset that lineup.
             has_scores = bool(rower.scores)
             side = rower.side_preference_str()
             # Get event count if regatta has events
-            event_count = count_events_entered(name) if has_events else 0
-            event_indicator = f" {format_event_indicator(event_count)}" if has_events else ""
+            event_count, has_conflict = count_events_entered(name) if has_events else (0, False)
+            event_indicator = f" {format_event_indicator(event_count, has_conflict)}" if has_events else ""
 
             # Check if rower is excluded (only show prefix when controls are visible)
             is_excluded = name in st.session_state.excluded_rowers
@@ -6796,8 +6800,8 @@ Clear buttons at the top of each column reset that lineup.
             has_scores = bool(rower.scores)
             side = rower.side_preference_str()
             # Get event count if regatta has events
-            event_count = count_events_entered(name) if has_events else 0
-            event_indicator = f" {format_event_indicator(event_count)}" if has_events else ""
+            event_count, has_conflict = count_events_entered(name) if has_events else (0, False)
+            event_indicator = f" {format_event_indicator(event_count, has_conflict)}" if has_events else ""
 
             # Check if rower is excluded (only show prefix when controls are visible)
             is_excluded = name in st.session_state.excluded_rowers
