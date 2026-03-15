@@ -6511,6 +6511,10 @@ Clear buttons at the top of each column reset that lineup.
                     return 0
                 regatta_name = selected_regatta.split("|")[0] if "|" in selected_regatta else selected_regatta
                 regatta_lower = regatta_name.lower()
+                # Extract day filter if present (e.g., "NW Regionals|Saturday, June 21, 2025")
+                day_filter = None
+                if "|" in selected_regatta:
+                    day_filter = selected_regatta.split("|", 1)[1].split(",")[0].split()[0].strip().lower()
                 count = 0
                 for entry in st.session_state.event_entries:
                     entry_regatta = entry['regatta'].lower()
@@ -6518,6 +6522,12 @@ Clear buttons at the top of each column reset that lineup.
                     regatta_match = (entry_regatta == regatta_lower or
                                     entry_regatta in regatta_lower or
                                     regatta_lower in entry_regatta)
+                    # If day filter is active, also match by day
+                    if day_filter and regatta_match:
+                        entry_day = entry.get('day', '')
+                        entry_day_name = entry_day.split(",")[0].split()[0].strip().lower() if entry_day else ''
+                        if entry_day_name != day_filter:
+                            continue
                     rowers_list = entry.get('rowers', [])
                     if not isinstance(rowers_list, list):
                         rowers_list = []
