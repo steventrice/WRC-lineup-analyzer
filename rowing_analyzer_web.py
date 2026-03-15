@@ -4021,8 +4021,10 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
             needs_cox = len(rowers) < expected
 
         # Find seat position for each rower
+        seen_in_entry = set()  # Avoid counting same rower twice from same entry
         for idx, rower in enumerate(rowers):
-            if rower in athlete_events:
+            if rower in athlete_events and rower not in seen_in_entry:
+                seen_in_entry.add(rower)
                 if event_num not in athlete_events[rower]:
                     athlete_events[rower][event_num] = []
                 # Determine seat label
