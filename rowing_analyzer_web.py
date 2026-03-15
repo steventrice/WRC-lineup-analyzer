@@ -7055,6 +7055,13 @@ Clear buttons at the top of each column reset that lineup.
 
             # Boat assignment dropdown (club boats) - displayed at top
             boat_key = f"boat_{key.split('_')[1]}"  # boat_a, boat_b, boat_c
+            clear_flag = f"clear_boat_{key}"
+
+            # Process pending clear BEFORE selectbox renders
+            if st.session_state.pop(clear_flag, False):
+                st.session_state[boat_key] = None
+                st.session_state.pop(f"boat_select_{key}", None)
+
             current_boat = st.session_state.get(boat_key)
             boat_options = ["(No boat assigned)"] + roster_manager.club_boats
             current_boat_idx = 0
@@ -7079,8 +7086,7 @@ Clear buttons at the top of each column reset that lineup.
             with boat_cols[1]:
                 if current_boat:
                     if st.button("❌", key=f"remove_boat_{key}"):
-                        st.session_state[boat_key] = None
-                        st.session_state[f"boat_select_{key}"] = "(No boat assigned)"
+                        st.session_state[clear_flag] = True
                         st.rerun()
 
             # Cox slot for coxed boats (4+, 8+)
