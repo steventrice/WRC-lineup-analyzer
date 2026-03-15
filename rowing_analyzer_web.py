@@ -7060,7 +7060,7 @@ Clear buttons at the top of each column reset that lineup.
             # Process pending clear BEFORE selectbox renders
             if st.session_state.pop(clear_flag, False):
                 st.session_state[boat_key] = None
-                st.session_state.pop(f"boat_select_{key}", None)
+                st.session_state[f"boat_select_{key}"] = "(No boat assigned)"
 
             current_boat = st.session_state.get(boat_key)
             boat_options = ["(No boat assigned)"] + roster_manager.club_boats
