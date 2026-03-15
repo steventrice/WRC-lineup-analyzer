@@ -4237,11 +4237,13 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                 z-index: 1;
                 text-align: center;
             }
-            .minimap-table thead tr:first-child th {
+            .minimap-table thead th {
                 top: 0;
             }
-            .minimap-table thead tr:last-child th {
-                top: 22px;
+            .minimap-table th .minimap-time {
+                font-size: 8px;
+                color: #888;
+                font-weight: normal;
             }
             .minimap-table th.corner {
                 position: sticky;
@@ -4336,19 +4338,13 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
             <thead><tr><th class="corner"></th>
         """
 
-        # Add time row first
-        for event in sorted_events:
-            time_str = format_event_time_func(event['time']) if event['time'] else ""
-            minimap_html += f'<th style="font-size: 9px; color: #666;">{time_str}</th>'
-
-        minimap_html += "</tr><tr><th class='corner'></th>"
-
-        # Add event headers (shorthand)
+        # Single header row with shorthand + time
         for event in sorted_events:
             shorthand = get_event_shorthand(event['name'])
             time_str = format_event_time_func(event['time']) if event['time'] else ""
             tooltip = f"{event['name']} @ {time_str}"
-            minimap_html += f'<th title="{tooltip}">{shorthand}</th>'
+            time_line = f'<br><span class="minimap-time">{time_str}</span>' if time_str else ""
+            minimap_html += f'<th title="{tooltip}">{shorthand}{time_line}</th>'
 
         minimap_html += "</tr></thead><tbody>"
 
