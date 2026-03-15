@@ -4241,7 +4241,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                 top: 0;
             }
             .minimap-table thead tr:last-child th {
-                top: 18px;
+                top: 22px;
             }
             .minimap-table th.corner {
                 position: sticky;
