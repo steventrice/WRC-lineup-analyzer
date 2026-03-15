@@ -467,6 +467,8 @@ def get_hot_seat_rowers(target_event_time: str, target_regatta: str, target_day:
     # Check each entry for the same regatta/day
     # Handle regatta names that may have day appended (e.g., "Covered Bridge|Saturday, April 25, 2026")
     target_regatta_base = target_regatta.split('|')[0] if '|' in target_regatta else target_regatta
+    # Normalize target_day to avoid format mismatches (e.g., "March 08" vs "March 8")
+    normalized_target_day = normalize_day_format(target_day) if target_day else target_day
 
     for entry in entries:
         # Filter to same regatta and day
@@ -474,7 +476,7 @@ def get_hot_seat_rowers(target_event_time: str, target_regatta: str, target_day:
         entry_regatta_base = entry_regatta.split('|')[0] if '|' in entry_regatta else entry_regatta
         if entry_regatta_base != target_regatta_base:
             continue
-        if entry.get('day') != target_day:
+        if normalize_day_format(entry.get('day', '')) != normalized_target_day:
             continue
 
         # Get entry's event time
@@ -1684,7 +1686,7 @@ class RosterManager:
                     try:
                         from datetime import datetime
                         dt = pd.to_datetime(col_a)
-                        current_day = dt.strftime("%A, %B %d, %Y")  # "Sunday, March 08, 2026"
+                        current_day = normalize_day_format(dt.strftime("%A, %B %d, %Y"))
                     except:
                         current_day = str_a
                 else:
