@@ -7080,7 +7080,7 @@ Clear buttons at the top of each column reset that lineup.
                 if current_boat:
                     if st.button("❌", key=f"remove_boat_{key}"):
                         st.session_state[boat_key] = None
-                        st.session_state.pop(f"boat_select_{key}", None)
+                        st.session_state[f"boat_select_{key}"] = "(No boat assigned)"
                         st.rerun()
 
             # Cox slot for coxed boats (4+, 8+)
