@@ -412,8 +412,67 @@ def is_name_in_list(roster_name: str, entry_names: list) -> bool:
     return False
 
 
+def assign_synthetic_times(event_numbers_with_times: dict, spacing_minutes: int = 5):
+    """Fill in synthetic times for events that lack real parsed times.
+
+    Walks events in event-number order, assigning synthetic times that maintain
+    ordering. Real parsed times are always preserved; synthetic events get times
+    based on 5-min spacing from the previous event's (real or synthetic) time.
+
+    Args:
+        event_numbers_with_times: dict of {event_number: parsed_datetime_or_None}
+        spacing_minutes: Minutes between synthetic events (default 5)
+
+    Returns:
+        Updated dict with None values replaced by synthetic datetimes.
+    """
+    from datetime import datetime, timedelta
+
+    if not event_numbers_with_times:
+        return event_numbers_with_times
+
+    missing = [k for k, v in event_numbers_with_times.items() if v is None]
+    if not missing:
+        return event_numbers_with_times  # All have real times, nothing to do
+
+    # Sort all event numbers to walk in schedule order
+    all_sorted = sorted(event_numbers_with_times.keys())
+    spacing = timedelta(minutes=spacing_minutes)
+
+    # First pass: find the earliest real time to anchor from, or use a default
+    real_times = [v for v in event_numbers_with_times.values() if v is not None]
+    if real_times:
+        # Count how many missing events come before the earliest real-time event
+        earliest_real_num = min(
+            (k for k, v in event_numbers_with_times.items() if v is not None),
+            key=lambda k: event_numbers_with_times[k]
+        )
+        missing_before = sum(1 for k in all_sorted if k < earliest_real_num and event_numbers_with_times[k] is None)
+        base_time = min(real_times) - spacing * (missing_before + 1)
+    else:
+        base_time = datetime(1900, 1, 1, 7, 0)  # 7:00 AM placeholder
+
+    # Second pass: assign times walking in event-number order
+    result = dict(event_numbers_with_times)
+    prev_time = base_time - spacing  # So first synthetic gets base_time
+
+    for evt_num in all_sorted:
+        real = event_numbers_with_times[evt_num]
+        if real is not None:
+            # Real time — keep it; ensure prev_time advances
+            prev_time = real
+        else:
+            # Synthetic — place spacing minutes after previous time
+            synth = prev_time + spacing
+            result[evt_num] = synth
+            prev_time = synth
+
+    return result
+
+
 def get_hot_seat_rowers(target_event_time: str, target_regatta: str, target_day: str,
-                        entries: List[dict], events: List, threshold_minutes: int) -> Set[str]:
+                        entries: List[dict], events: List, threshold_minutes: int,
+                        target_event_number: int = None) -> Set[str]:
     """Return rowers committed to events within threshold_minutes of target.
 
     Args:
@@ -423,6 +482,7 @@ def get_hot_seat_rowers(target_event_time: str, target_regatta: str, target_day:
         entries: List of entry dicts from load_entries_from_gsheet()
         events: List of RegattaEvent objects for the regatta
         threshold_minutes: Time window in minutes to consider as hot-seating
+        target_event_number: Event number of the target event (for synthetic time fallback)
 
     Returns:
         Set of rower names who are in events within the threshold window
@@ -432,7 +492,7 @@ def get_hot_seat_rowers(target_event_time: str, target_regatta: str, target_day:
 
     hot_seat_rowers = set()
 
-    if not target_event_time or threshold_minutes <= 0:
+    if threshold_minutes <= 0:
         return hot_seat_rowers
 
     # Parse target event time
@@ -453,16 +513,20 @@ def get_hot_seat_rowers(target_event_time: str, target_regatta: str, target_day:
                 continue
         return None
 
-    target_time = parse_time(target_event_time)
-    if not target_time:
-        return hot_seat_rowers
-
-    # Build event_number -> parsed_time mapping from events list
+    # Build event_number -> parsed_time mapping from events list (None for unparseable)
     event_times = {}
     for event in events:
-        parsed = parse_time(event.event_time)
-        if parsed:
-            event_times[event.event_number] = parsed
+        event_times[event.event_number] = parse_time(event.event_time)
+
+    # Fill in synthetic times (5-min spacing) for events without real times
+    event_times = assign_synthetic_times(event_times)
+
+    # Resolve target time: prefer parsed real time, fall back to synthetic
+    target_time = parse_time(target_event_time)
+    if not target_time and target_event_number is not None:
+        target_time = event_times.get(target_event_number)
+    if not target_time:
+        return hot_seat_rowers
 
     # Check each entry for the same regatta/day
     # Handle regatta names that may have day appended (e.g., "Covered Bridge|Saturday, April 25, 2026")
@@ -3982,6 +4046,13 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
         else:
             events_dict[event_num]['has_entries'] = True
 
+    # Fill in synthetic times (5-min spacing) for events without real times
+    time_map = {e['number']: e['parsed_time'] for e in events_dict.values()}
+    filled_map = assign_synthetic_times(time_map)
+    for evt_num, synth_time in filled_map.items():
+        if evt_num in events_dict and events_dict[evt_num]['parsed_time'] is None:
+            events_dict[evt_num]['parsed_time'] = synth_time
+
     # Sort events by time
     sorted_events = sorted(events_dict.values(), key=lambda e: (e['parsed_time'] or datetime.min, e['number']))
 
@@ -6223,27 +6294,30 @@ Clear buttons at the top of each column reset that lineup.
 
             # Add hot-seat exclusions if enabled and event is selected
             if is_event_mode and st.session_state.exclude_hot_seats and st.session_state.hot_seat_threshold > 0:
-                # Find the selected event's time and day
+                # Find the selected event's time, day, and number
                 target_event_time = None
                 target_event_day = None
+                target_event_num = st.session_state.autofill_selected_event
                 for event in events:
-                    if event.event_number == st.session_state.autofill_selected_event:
+                    if event.event_number == target_event_num:
                         target_event_time = event.event_time
                         target_event_day = event.day
                         break
 
-                if target_event_time and target_event_day:
+                if target_event_day:
                     # Load existing entries
                     existing_entries = load_entries_from_gsheet()
 
                     # Get rowers in events within threshold
+                    # (works even without real times via synthetic 5-min spacing)
                     hot_seat_exclusions = get_hot_seat_rowers(
-                        target_event_time=target_event_time,
+                        target_event_time=target_event_time or '',
                         target_regatta=selected_regatta,
                         target_day=target_event_day,
                         entries=existing_entries,
                         events=events,
-                        threshold_minutes=st.session_state.hot_seat_threshold
+                        threshold_minutes=st.session_state.hot_seat_threshold,
+                        target_event_number=target_event_num
                     )
 
                     # Add to combined exclusions
