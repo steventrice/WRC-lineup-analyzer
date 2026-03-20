@@ -6084,6 +6084,10 @@ Clear buttons at the top of each column reset that lineup.
                     current_event_label = label
                     break
 
+            # Sync selectbox widget key when event was selected via ⚡ button
+            if autofill_expanded:
+                st.session_state.autofill_event_select = current_event_label
+
             autofill_cols = st.columns([3, 2, 2, 2, 2])
 
             with autofill_cols[0]:
