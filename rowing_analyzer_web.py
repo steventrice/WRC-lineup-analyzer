@@ -4330,7 +4330,22 @@ def generate_competitive_outlook_excel(dashboard_entries, events_dict, roster_ma
 
     # ── Compute GMS% and tier for each entry ──
     analyzer = BoatAnalyzer(roster_manager)
-    target_distance = st.session_state.get('regatta_distances', {}).get(selected_regatta, 2000)
+    default_distance = get_regatta_default_distance(selected_regatta)
+    target_distance = st.session_state.get('regatta_distances', {}).get(selected_regatta, default_distance)
+
+    def _masters_category(avg_age):
+        """US Rowing Masters category from average age."""
+        if avg_age < 27: return "AA"
+        elif avg_age < 36: return "A"
+        elif avg_age < 43: return "B"
+        elif avg_age < 50: return "C"
+        elif avg_age < 55: return "D"
+        elif avg_age < 60: return "E"
+        elif avg_age < 65: return "F"
+        elif avg_age < 70: return "G"
+        elif avg_age < 75: return "H"
+        elif avg_age < 80: return "I"
+        else: return "J"
 
     entry_results = []  # List of dicts with entry info + gms_pct + tier
     for entry in dashboard_entries:
@@ -4340,12 +4355,6 @@ def generate_competitive_outlook_excel(dashboard_entries, events_dict, roster_ma
         entry_num = entry.get('entry_number', 1)
         event_name = entry.get('event_name', '')
         category_str = entry.get('category', '')
-
-        # Parse gender and masters category from category field (e.g., "M A", "W C", "Mix E")
-        parts = category_str.split()
-        gender_raw = parts[0] if len(parts) >= 1 else 'M'
-        masters_cat = parts[1] if len(parts) >= 2 else 'A'
-        gms_gender = {'M': 'M', 'W': 'W', 'Mix': 'Mixed'}.get(gender_raw, gender_raw)
 
         # Get event time from events_dict
         event_info = events_dict.get(event_num, {})
@@ -4359,7 +4368,30 @@ def generate_competitive_outlook_excel(dashboard_entries, events_dict, roster_ma
                                              calc_method='split', pace_predictor='power_law')
             if 'error' not in result:
                 raw_time = result.get('raw_time')
+                avg_age = result.get('avg_age', 0)
                 if raw_time and raw_time > 0:
+                    # Derive gender from roster data (matches inline analysis approach)
+                    genders = set()
+                    for name in rowers:
+                        r = roster_manager.get_rower(name)
+                        if r and getattr(r, 'gender', ''):
+                            g = r.gender.upper()
+                            if g == 'F':
+                                g = 'W'
+                            genders.add(g)
+                    if len(genders) == 1:
+                        lineup_gender = genders.pop()
+                    elif len(genders) > 1:
+                        lineup_gender = 'Mix'
+                    else:
+                        # Fallback: parse from entry category
+                        parts = category_str.split()
+                        lineup_gender = parts[0] if parts else 'M'
+                    gms_gender = {'M': 'M', 'W': 'W', 'Mix': 'Mixed'}.get(lineup_gender, lineup_gender)
+
+                    # Derive masters category from crew avg age (matches inline analysis)
+                    masters_cat = _masters_category(avg_age) if avg_age > 0 else 'A'
+
                     gms_time = roster_manager.get_gms_time(
                         selected_regatta, target_distance, boat_class, gms_gender, masters_cat
                     )
@@ -4372,7 +4404,7 @@ def generate_competitive_outlook_excel(dashboard_entries, events_dict, roster_ma
                         else:
                             tier = 'Development'
         except Exception:
-            pass
+            pass  # Entry stays Unrated if analysis fails entirely
 
         lineup_str = ", ".join(rowers) if rowers else ""
         entry_results.append({
