@@ -4292,6 +4292,259 @@ def generate_day_overview_excel(sorted_events, events_dict, all_athletes, athlet
     return buf.getvalue()
 
 
+def generate_competitive_outlook_excel(dashboard_entries, events_dict, roster_manager,
+                                       selected_regatta, format_event_time_func, regatta_name):
+    """Generate an Excel workbook with competitive outlook analysis based on GMS percentages.
+
+    Returns bytes suitable for st.download_button.
+    """
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    from collections import defaultdict
+
+    wb = Workbook()
+
+    # ── Styling ──
+    win_fill = PatternFill(start_color='FFD700', end_color='FFD700', fill_type='solid')
+    medal_fill = PatternFill(start_color='C0C0C0', end_color='C0C0C0', fill_type='solid')
+    dev_fill = PatternFill(start_color='BDD7EE', end_color='BDD7EE', fill_type='solid')
+    unrated_fill = PatternFill(start_color='D9D9D9', end_color='D9D9D9', fill_type='solid')
+    header_fill = PatternFill(start_color='F0F0F0', end_color='F0F0F0', fill_type='solid')
+    thin_border = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin'),
+    )
+    bold_font = Font(bold=True)
+    header_font = Font(bold=True, size=10)
+    wrap_align = Alignment(wrap_text=True, vertical='center', horizontal='center')
+    left_align = Alignment(vertical='center', horizontal='left')
+
+    tier_fills = {
+        'Win': win_fill,
+        'Medal': medal_fill,
+        'Development': dev_fill,
+        'Unrated': unrated_fill,
+    }
+
+    # ── Compute GMS% and tier for each entry ──
+    analyzer = BoatAnalyzer(roster_manager)
+    target_distance = st.session_state.get('regatta_distances', {}).get(selected_regatta, 2000)
+
+    entry_results = []  # List of dicts with entry info + gms_pct + tier
+    for entry in dashboard_entries:
+        rowers = entry.get('rowers', [])
+        boat_class = entry.get('boat_class', '')
+        event_num = entry.get('event_number')
+        entry_num = entry.get('entry_number', 1)
+        event_name = entry.get('event_name', '')
+        category_str = entry.get('category', '')
+
+        # Parse gender and masters category from category field (e.g., "M A", "W C", "Mix E")
+        parts = category_str.split()
+        gender_raw = parts[0] if len(parts) >= 1 else 'M'
+        masters_cat = parts[1] if len(parts) >= 2 else 'A'
+        gms_gender = {'M': 'M', 'W': 'W', 'Mix': 'Mixed'}.get(gender_raw, gender_raw)
+
+        # Get event time from events_dict
+        event_info = events_dict.get(event_num, {})
+        event_time = event_info.get('time', entry.get('event_time', ''))
+
+        # Analyze the lineup
+        gms_pct = None
+        tier = 'Unrated'
+        try:
+            result = analyzer.analyze_lineup(rowers, target_distance, boat_class,
+                                             calc_method='split', pace_predictor='power_law')
+            if 'error' not in result:
+                raw_time = result.get('raw_time')
+                if raw_time and raw_time > 0:
+                    gms_time = roster_manager.get_gms_time(
+                        selected_regatta, target_distance, boat_class, gms_gender, masters_cat
+                    )
+                    if gms_time and gms_time > 0:
+                        gms_pct = (gms_time / raw_time) * 100
+                        if gms_pct >= 95:
+                            tier = 'Win'
+                        elif gms_pct >= 85:
+                            tier = 'Medal'
+                        else:
+                            tier = 'Development'
+        except Exception:
+            pass
+
+        lineup_str = ", ".join(rowers) if rowers else ""
+        entry_results.append({
+            'event_time': event_time,
+            'event_name': event_name,
+            'event_number': event_num,
+            'entry_number': entry_num,
+            'boat_class': boat_class,
+            'category': category_str,
+            'lineup': lineup_str,
+            'rowers': rowers,
+            'gms_pct': gms_pct,
+            'tier': tier,
+        })
+
+    # Sort by event time, then event number
+    def sort_key(er):
+        t = er['event_time'] or ''
+        return (t, er['event_number'], er['entry_number'])
+    entry_results.sort(key=sort_key)
+
+    # ===========================
+    # Sheet 1: Entry Details
+    # ===========================
+    ws1 = wb.active
+    ws1.title = "Entry Details"
+
+    headers = ["Event Time", "Event Name", "Entry #", "Boat Class", "Category", "Lineup", "GMS %", "Tier"]
+    for col_idx, header in enumerate(headers, start=1):
+        cell = ws1.cell(row=1, column=col_idx, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = wrap_align
+        cell.border = thin_border
+
+    for row_idx, er in enumerate(entry_results, start=2):
+        time_display = format_event_time_func(er['event_time']) if er['event_time'] else ""
+        gms_display = f"{er['gms_pct']:.1f}%" if er['gms_pct'] is not None else "-"
+
+        values = [
+            time_display,
+            er['event_name'],
+            er['entry_number'],
+            er['boat_class'],
+            er['category'],
+            er['lineup'],
+            gms_display,
+            er['tier'],
+        ]
+        for col_idx, val in enumerate(values, start=1):
+            cell = ws1.cell(row=row_idx, column=col_idx, value=val)
+            cell.border = thin_border
+            cell.alignment = left_align if col_idx in (2, 5, 6) else wrap_align
+            # Color the Tier column
+            if col_idx == 8:
+                cell.fill = tier_fills.get(er['tier'], unrated_fill)
+
+    # Column widths
+    col_widths = [12, 30, 8, 12, 10, 50, 10, 14]
+    for i, w in enumerate(col_widths, start=1):
+        ws1.column_dimensions[get_column_letter(i)].width = w
+    ws1.freeze_panes = 'A2'
+
+    # ===========================
+    # Sheet 2: Athlete Summary
+    # ===========================
+    ws2 = wb.create_sheet("Athlete Summary")
+
+    # Build per-athlete stats
+    athlete_stats = defaultdict(lambda: {'events': 0, 'Win': 0, 'Medal': 0, 'Development': 0, 'Unrated': 0, 'best_gms': None})
+    for er in entry_results:
+        for rower in er['rowers']:
+            stats = athlete_stats[rower]
+            stats['events'] += 1
+            stats[er['tier']] += 1
+            if er['gms_pct'] is not None:
+                if stats['best_gms'] is None or er['gms_pct'] > stats['best_gms']:
+                    stats['best_gms'] = er['gms_pct']
+
+    athlete_headers = ["Athlete", "Events", "Win", "Medal", "Development", "Unrated", "Best GMS %"]
+    for col_idx, header in enumerate(athlete_headers, start=1):
+        cell = ws2.cell(row=1, column=col_idx, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = wrap_align
+        cell.border = thin_border
+
+    for row_idx, athlete in enumerate(sorted(athlete_stats.keys()), start=2):
+        stats = athlete_stats[athlete]
+        best_gms_display = f"{stats['best_gms']:.1f}%" if stats['best_gms'] is not None else "-"
+        values = [
+            athlete,
+            stats['events'],
+            stats['Win'],
+            stats['Medal'],
+            stats['Development'],
+            stats['Unrated'],
+            best_gms_display,
+        ]
+        for col_idx, val in enumerate(values, start=1):
+            cell = ws2.cell(row=row_idx, column=col_idx, value=val)
+            cell.border = thin_border
+            cell.alignment = left_align if col_idx == 1 else wrap_align
+            # Highlight Win column gold if count > 0
+            if col_idx == 3 and stats['Win'] > 0:
+                cell.fill = win_fill
+            # Highlight Medal column silver if count > 0
+            if col_idx == 4 and stats['Medal'] > 0:
+                cell.fill = medal_fill
+
+    # Column widths
+    athlete_col_widths = [25, 10, 8, 8, 14, 10, 12]
+    for i, w in enumerate(athlete_col_widths, start=1):
+        ws2.column_dimensions[get_column_letter(i)].width = w
+    ws2.freeze_panes = 'A2'
+
+    # ===========================
+    # Sheet 3: Competitive Balance
+    # ===========================
+    ws3 = wb.create_sheet("Competitive Balance")
+
+    total = len(entry_results)
+    tier_counts = {'Win': 0, 'Medal': 0, 'Development': 0, 'Unrated': 0}
+    for er in entry_results:
+        tier_counts[er['tier']] += 1
+
+    athletes_in_win = sum(1 for s in athlete_stats.values() if s['Win'] > 0)
+    athletes_in_medal_plus = sum(1 for s in athlete_stats.values() if s['Win'] > 0 or s['Medal'] > 0)
+    num_athletes = len(athlete_stats)
+    avg_entries = round(total / num_athletes, 1) if num_athletes > 0 else 0
+
+    def pct_str(count, total_count):
+        return f"{count} ({round(count / total_count * 100)}%)" if total_count > 0 else "0"
+
+    balance_rows = [
+        ("Total Entries", str(total)),
+        ("Win Tier", pct_str(tier_counts['Win'], total)),
+        ("Medal Tier", pct_str(tier_counts['Medal'], total)),
+        ("Development Tier", pct_str(tier_counts['Development'], total)),
+        ("Unrated", pct_str(tier_counts['Unrated'], total)),
+        ("Athletes in Win Tier", str(athletes_in_win)),
+        ("Athletes in Medal+ Tier", str(athletes_in_medal_plus)),
+        ("Avg Entries per Athlete", str(avg_entries)),
+    ]
+
+    # Headers
+    for col_idx, header in enumerate(["Metric", "Value"], start=1):
+        cell = ws3.cell(row=1, column=col_idx, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = wrap_align
+        cell.border = thin_border
+
+    for row_idx, (metric, value) in enumerate(balance_rows, start=2):
+        cell_m = ws3.cell(row=row_idx, column=1, value=metric)
+        cell_m.font = bold_font
+        cell_m.alignment = left_align
+        cell_m.border = thin_border
+        cell_v = ws3.cell(row=row_idx, column=2, value=value)
+        cell_v.alignment = wrap_align
+        cell_v.border = thin_border
+
+    ws3.column_dimensions['A'].width = 28
+    ws3.column_dimensions['B'].width = 18
+
+    # Write to bytes
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def render_dashboard(selected_regatta: str, roster_manager, format_event_time_func):
     """Render the regatta dashboard view with athlete x event grid"""
     import re
@@ -4595,7 +4848,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
     st.caption(f"**Athlete breakdown:** {' | '.join(breakdown_parts)}")
 
     # Legend and sort control
-    legend_col, sort_col, overview_col, export_col = st.columns([3, 1, 1, 1])
+    legend_col, sort_col, overview_col, export_col, outlook_col = st.columns([2, 1, 1, 1, 1])
     with legend_col:
         st.caption("**Hot Seat Legend:** 🟢 90+ min gap | 🟡 60-89 min | 🟠 30-59 min | 🔴 <30 min")
     with sort_col:
@@ -4628,11 +4881,28 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                 dashboard_entries, format_event_time_func, regatta_name
             )
             st.download_button(
-                label="📥 Export",
+                label="📥 Hot Seats",
                 data=excel_bytes,
                 file_name=export_filename,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="day_overview_export_btn"
+            )
+    with outlook_col:
+        if total_entries > 0:
+            from datetime import date as _date2
+            day_label_ol = day_filter if day_filter else "all"
+            safe_name_ol = re.sub(r'[^\w\s-]', '', regatta_name).strip().replace(' ', '_')
+            outlook_filename = f"{safe_name_ol}_{day_label_ol}_competitive_outlook_{_date2.today().strftime('%Y%m%d')}.xlsx"
+            outlook_bytes = generate_competitive_outlook_excel(
+                dashboard_entries, events_dict, roster_manager,
+                selected_regatta, format_event_time_func, regatta_name
+            )
+            st.download_button(
+                label="📊 Outlook",
+                data=outlook_bytes,
+                file_name=outlook_filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="competitive_outlook_export_btn"
             )
 
     # Day Overview Mini-Map Dialog
