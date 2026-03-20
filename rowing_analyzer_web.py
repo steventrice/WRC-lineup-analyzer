@@ -6084,9 +6084,8 @@ Clear buttons at the top of each column reset that lineup.
                     current_event_label = label
                     break
 
-            # Sync selectbox widget key when event was selected via ⚡ button
-            if autofill_expanded:
-                st.session_state.autofill_event_select = current_event_label
+            # Always keep selectbox in sync with backing state
+            st.session_state.autofill_event_select = current_event_label
 
             autofill_cols = st.columns([3, 2, 2, 2, 2])
 
@@ -6094,7 +6093,6 @@ Clear buttons at the top of each column reset that lineup.
                 selected_event_label = st.selectbox(
                     "Event",
                     options=list(event_options.keys()),
-                    index=list(event_options.keys()).index(current_event_label),
                     key="autofill_event_select",
                     help="Select an event to auto-apply constraints, or Manual Mode for custom settings"
                 )
