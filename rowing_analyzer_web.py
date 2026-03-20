@@ -5844,9 +5844,12 @@ Clear buttons at the top of each column reset that lineup.
                         st.session_state.autofill_selected_event = None
                     else:
                         st.session_state.autofill_selected_event = event.event_number
+                        st.session_state.expand_autofill = True
                         event_boat = parse_event_boat_class(event.event_name)
                         if event_boat and event_boat != st.session_state.get('selected_boat_class'):
                             st.session_state.pending_boat_class = event_boat
+                        if st.session_state.get('view_mode') != 'lineup':
+                            st.session_state.view_mode = 'lineup'
                     st.rerun()
 
             with cols[1]:
@@ -6063,7 +6066,8 @@ Clear buttons at the top of each column reset that lineup.
         boat_seats = {'1x': 1, '2x': 2, '2-': 2, '4x': 4, '4+': 4, '4-': 4, '8+': 8}
         num_rowing_seats = boat_seats.get(boat_class, 4)
 
-        with st.expander("⚡ Autofill Lineup", expanded=False):
+        autofill_expanded = st.session_state.pop('expand_autofill', False)
+        with st.expander("⚡ Autofill Lineup", expanded=autofill_expanded):
             # Build event dropdown options
             events = roster_manager.regatta_events.get(selected_regatta, [])
             event_options = {"-- Manual Mode --": None}  # None = manual mode
