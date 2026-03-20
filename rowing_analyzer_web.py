@@ -3960,6 +3960,338 @@ def get_seat_labels(num_seats: int) -> List[str]:
     return labels.get(num_seats, [str(i) for i in range(1, num_seats + 1)])
 
 
+def generate_day_overview_excel(sorted_events, events_dict, all_athletes, athlete_events,
+                                athlete_colors, all_boats_used, boat_events, boat_colors,
+                                dashboard_entries, format_event_time_func, regatta_name):
+    """Generate an Excel workbook with Day Overview grid and Issues Summary.
+
+    Returns bytes suitable for st.download_button.
+    """
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    from datetime import datetime
+
+    wb = Workbook()
+
+    # ── Color mapping ──
+    emoji_fill = {
+        '🟢': PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid'),
+        '🟡': PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid'),
+        '🟠': PatternFill(start_color='FFC000', end_color='FFC000', fill_type='solid'),
+        '🔴': PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid'),
+    }
+    conflict_fill = PatternFill(start_color='FF69B4', end_color='FF69B4', fill_type='solid')
+    header_fill = PatternFill(start_color='F0F0F0', end_color='F0F0F0', fill_type='solid')
+    separator_fill = PatternFill(start_color='D9D9D9', end_color='D9D9D9', fill_type='solid')
+    thin_border = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin'),
+    )
+    bold_font = Font(bold=True)
+    header_font = Font(bold=True, size=10)
+    small_font = Font(size=9)
+    wrap_align = Alignment(wrap_text=True, vertical='center', horizontal='center')
+    left_align = Alignment(vertical='center', horizontal='left')
+
+    # ===========================
+    # Sheet 1: Day Overview
+    # ===========================
+    ws = wb.active
+    ws.title = "Day Overview"
+
+    num_events = len(sorted_events)
+
+    # Row 1: event times
+    ws.cell(row=1, column=1, value="").font = bold_font
+    ws.cell(row=1, column=1).fill = header_fill
+    ws.cell(row=1, column=1).border = thin_border
+    for col_idx, event in enumerate(sorted_events, start=2):
+        time_str = format_event_time_func(event['time']) if event['time'] else ""
+        cell = ws.cell(row=1, column=col_idx, value=time_str)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = wrap_align
+        cell.border = thin_border
+
+    # Row 2: event names
+    ws.cell(row=2, column=1, value="").font = bold_font
+    ws.cell(row=2, column=1).fill = header_fill
+    ws.cell(row=2, column=1).border = thin_border
+    for col_idx, event in enumerate(sorted_events, start=2):
+        cell = ws.cell(row=2, column=col_idx, value=event['name'])
+        cell.font = small_font
+        cell.fill = header_fill
+        cell.alignment = wrap_align
+        cell.border = thin_border
+
+    # Athlete rows (starting row 3)
+    row = 3
+    for athlete in sorted(all_athletes):
+        ws.cell(row=row, column=1, value=athlete).font = bold_font
+        ws.cell(row=row, column=1).alignment = left_align
+        ws.cell(row=row, column=1).border = thin_border
+
+        for col_idx, event in enumerate(sorted_events, start=2):
+            cell = ws.cell(row=row, column=col_idx)
+            cell.border = thin_border
+            cell.alignment = wrap_align
+            event_num = event['number']
+
+            if event_num in athlete_events.get(athlete, {}):
+                entries = athlete_events[athlete][event_num]
+                color_emoji = athlete_colors.get(athlete, {}).get(event_num, '⚪')
+
+                if len(entries) > 1:
+                    cell.value = "CONFLICT"
+                    cell.fill = conflict_fill
+                    cell.font = Font(bold=True, color='FFFFFF')
+                else:
+                    entry_info = entries[0]
+                    seat = entry_info['seat']
+                    club_boat = entry_info.get('club_boat', '')
+                    parts = [seat]
+                    if club_boat:
+                        parts.append(club_boat)
+                    cell.value = " / ".join(parts)
+                    cell.font = small_font
+                    if color_emoji in emoji_fill:
+                        cell.fill = emoji_fill[color_emoji]
+        row += 1
+
+    # Separator row for Equipment
+    if all_boats_used:
+        sep_row = row
+        cell = ws.cell(row=sep_row, column=1, value="Equipment")
+        cell.font = Font(bold=True, size=11)
+        cell.fill = separator_fill
+        cell.alignment = left_align
+        cell.border = thin_border
+        for col_idx in range(2, num_events + 2):
+            c = ws.cell(row=sep_row, column=col_idx)
+            c.fill = separator_fill
+            c.border = thin_border
+        row = sep_row + 1
+
+        # Boat rows
+        for boat in sorted(all_boats_used):
+            ws.cell(row=row, column=1, value=boat).font = Font(bold=True, italic=True)
+            ws.cell(row=row, column=1).alignment = left_align
+            ws.cell(row=row, column=1).border = thin_border
+
+            for col_idx, event in enumerate(sorted_events, start=2):
+                cell = ws.cell(row=row, column=col_idx)
+                cell.border = thin_border
+                cell.alignment = wrap_align
+                event_num = event['number']
+
+                if boat in boat_events and event_num in boat_events[boat]:
+                    b_entries = boat_events[boat][event_num]
+                    color_emoji = boat_colors.get(boat, {}).get(event_num, '⚪')
+
+                    if len(b_entries) > 1:
+                        cell.value = "DOUBLE-BOOKED"
+                        cell.fill = conflict_fill
+                        cell.font = Font(bold=True, color='FFFFFF')
+                    else:
+                        info = b_entries[0]
+                        cell.value = f"{info['boat_class']} {info.get('category', '')}"
+                        cell.font = small_font
+                        if color_emoji in emoji_fill:
+                            cell.fill = emoji_fill[color_emoji]
+            row += 1
+
+    # Column widths
+    ws.column_dimensions['A'].width = 22
+    for col_idx in range(2, num_events + 2):
+        ws.column_dimensions[get_column_letter(col_idx)].width = 18
+
+    # Freeze panes: sticky name column + 2 header rows
+    ws.freeze_panes = 'B3'
+
+    # ===========================
+    # Sheet 2: Issues Summary
+    # ===========================
+    ws2 = wb.create_sheet("Issues Summary")
+
+    def write_section_header(sheet, r, title, num_cols=7):
+        cell = sheet.cell(row=r, column=1, value=title)
+        cell.font = Font(bold=True, size=12)
+        cell.fill = separator_fill
+        cell.border = thin_border
+        for c in range(2, num_cols + 1):
+            sc = sheet.cell(row=r, column=c)
+            sc.fill = separator_fill
+            sc.border = thin_border
+        return r + 1
+
+    def write_column_headers(sheet, r, headers):
+        for c_idx, h in enumerate(headers, start=1):
+            cell = sheet.cell(row=r, column=c_idx, value=h)
+            cell.font = bold_font
+            cell.fill = header_fill
+            cell.border = thin_border
+            cell.alignment = wrap_align
+        return r + 1
+
+    def get_minutes_between(time1, time2):
+        if time1 and time2:
+            delta = time2 - time1
+            return round(delta.total_seconds() / 60)
+        return None
+
+    def severity_label(gap):
+        if gap is None:
+            return "Unknown"
+        if gap < 30:
+            return "Critical (<30 min)"
+        if gap < 60:
+            return "Warning (30-59 min)"
+        return "Caution (60-89 min)"
+
+    issue_row = 1
+
+    # ── Hot-Seated Athletes (orange/red only) ──
+    issue_row = write_section_header(ws2, issue_row, "Hot-Seated Athletes")
+    issue_row = write_column_headers(ws2, issue_row,
+        ["Athlete", "Event 1", "Time 1", "Event 2", "Time 2", "Gap (min)", "Severity"])
+
+    for athlete in sorted(all_athletes):
+        events_for_a = []
+        for event_num in athlete_events.get(athlete, {}):
+            evt = events_dict.get(event_num, {})
+            events_for_a.append((event_num, evt.get('parsed_time'), evt.get('name', ''),
+                                 format_event_time_func(evt.get('time', '')) if evt.get('time') else ''))
+        events_for_a.sort(key=lambda x: x[1] or datetime.min)
+
+        for i in range(1, len(events_for_a)):
+            prev_num, prev_parsed, prev_name, prev_time = events_for_a[i - 1]
+            cur_num, cur_parsed, cur_name, cur_time = events_for_a[i]
+            gap = get_minutes_between(prev_parsed, cur_parsed)
+            if gap is not None and gap < 90:
+                color_emoji = athlete_colors.get(athlete, {}).get(cur_num, '⚪')
+                if color_emoji in ['🟠', '🔴']:
+                    ws2.cell(row=issue_row, column=1, value=athlete).border = thin_border
+                    ws2.cell(row=issue_row, column=2, value=prev_name).border = thin_border
+                    ws2.cell(row=issue_row, column=3, value=prev_time).border = thin_border
+                    ws2.cell(row=issue_row, column=4, value=cur_name).border = thin_border
+                    ws2.cell(row=issue_row, column=5, value=cur_time).border = thin_border
+                    c = ws2.cell(row=issue_row, column=6, value=gap)
+                    c.border = thin_border
+                    if color_emoji in emoji_fill:
+                        c.fill = emoji_fill[color_emoji]
+                    sev_cell = ws2.cell(row=issue_row, column=7, value=severity_label(gap))
+                    sev_cell.border = thin_border
+                    if color_emoji in emoji_fill:
+                        sev_cell.fill = emoji_fill[color_emoji]
+                    issue_row += 1
+
+    issue_row += 1  # blank row
+
+    # ── Hot-Seated Equipment (orange/red only) ──
+    issue_row = write_section_header(ws2, issue_row, "Hot-Seated Equipment")
+    issue_row = write_column_headers(ws2, issue_row,
+        ["Boat", "Event 1", "Time 1", "Event 2", "Time 2", "Gap (min)", "Severity"])
+
+    for boat in sorted(all_boats_used):
+        events_for_b = []
+        for event_num in boat_events.get(boat, {}):
+            evt = events_dict.get(event_num, {})
+            events_for_b.append((event_num, evt.get('parsed_time'), evt.get('name', ''),
+                                 format_event_time_func(evt.get('time', '')) if evt.get('time') else ''))
+        events_for_b.sort(key=lambda x: x[1] or datetime.min)
+
+        for i in range(1, len(events_for_b)):
+            prev_num, prev_parsed, prev_name, prev_time = events_for_b[i - 1]
+            cur_num, cur_parsed, cur_name, cur_time = events_for_b[i]
+            gap = get_minutes_between(prev_parsed, cur_parsed)
+            if gap is not None and gap < 90:
+                color_emoji = boat_colors.get(boat, {}).get(cur_num, '⚪')
+                if color_emoji in ['🟠', '🔴']:
+                    ws2.cell(row=issue_row, column=1, value=boat).border = thin_border
+                    ws2.cell(row=issue_row, column=2, value=prev_name).border = thin_border
+                    ws2.cell(row=issue_row, column=3, value=prev_time).border = thin_border
+                    ws2.cell(row=issue_row, column=4, value=cur_name).border = thin_border
+                    ws2.cell(row=issue_row, column=5, value=cur_time).border = thin_border
+                    c = ws2.cell(row=issue_row, column=6, value=gap)
+                    c.border = thin_border
+                    if color_emoji in emoji_fill:
+                        c.fill = emoji_fill[color_emoji]
+                    sev_cell = ws2.cell(row=issue_row, column=7, value=severity_label(gap))
+                    sev_cell.border = thin_border
+                    if color_emoji in emoji_fill:
+                        sev_cell.fill = emoji_fill[color_emoji]
+                    issue_row += 1
+
+    issue_row += 1
+
+    # ── Missing Cox ──
+    issue_row = write_section_header(ws2, issue_row, "Missing Cox", num_cols=4)
+    issue_row = write_column_headers(ws2, issue_row, ["Event Name", "Time", "Boat Class", "Lineup"])
+
+    for entry in dashboard_entries:
+        boat_class = entry.get('boat_class', '')
+        if '+' in boat_class:
+            expected = {'4+': 5, '8+': 9}.get(boat_class, 0)
+            rowers = entry.get('rowers', [])
+            if len(rowers) < expected:
+                evt_num = entry.get('event_number')
+                evt = events_dict.get(evt_num, {})
+                time_str = format_event_time_func(evt.get('time', '')) if evt.get('time') else ''
+                ws2.cell(row=issue_row, column=1, value=entry.get('event_name', '')).border = thin_border
+                ws2.cell(row=issue_row, column=2, value=time_str).border = thin_border
+                ws2.cell(row=issue_row, column=3, value=boat_class).border = thin_border
+                ws2.cell(row=issue_row, column=4, value=", ".join(rowers)).border = thin_border
+                issue_row += 1
+
+    issue_row += 1
+
+    # ── Missing Boat Assignment ──
+    issue_row = write_section_header(ws2, issue_row, "Missing Boat Assignment", num_cols=4)
+    issue_row = write_column_headers(ws2, issue_row, ["Event Name", "Time", "Boat Class", "Lineup"])
+
+    for entry in dashboard_entries:
+        club_boat = str(entry.get('boat', '') or '').strip()
+        if not club_boat:
+            evt_num = entry.get('event_number')
+            evt = events_dict.get(evt_num, {})
+            time_str = format_event_time_func(evt.get('time', '')) if evt.get('time') else ''
+            rowers = entry.get('rowers', [])
+            ws2.cell(row=issue_row, column=1, value=entry.get('event_name', '')).border = thin_border
+            ws2.cell(row=issue_row, column=2, value=time_str).border = thin_border
+            ws2.cell(row=issue_row, column=3, value=entry.get('boat_class', '')).border = thin_border
+            ws2.cell(row=issue_row, column=4, value=", ".join(rowers)).border = thin_border
+            issue_row += 1
+
+    issue_row += 1
+
+    # ── Conflicts (athlete in multiple entries for same event) ──
+    issue_row = write_section_header(ws2, issue_row, "Conflicts", num_cols=4)
+    issue_row = write_column_headers(ws2, issue_row, ["Athlete", "Event Name", "Time", "# Entries"])
+
+    for athlete in sorted(all_athletes):
+        for event_num, entries in athlete_events.get(athlete, {}).items():
+            if len(entries) > 1:
+                evt = events_dict.get(event_num, {})
+                time_str = format_event_time_func(evt.get('time', '')) if evt.get('time') else ''
+                ws2.cell(row=issue_row, column=1, value=athlete).border = thin_border
+                ws2.cell(row=issue_row, column=2, value=evt.get('name', '')).border = thin_border
+                ws2.cell(row=issue_row, column=3, value=time_str).border = thin_border
+                ws2.cell(row=issue_row, column=4, value=len(entries)).border = thin_border
+                issue_row += 1
+
+    # Auto-size columns on Issues sheet
+    for col_idx in range(1, 8):
+        ws2.column_dimensions[get_column_letter(col_idx)].width = 22
+
+    # Write to bytes
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def render_dashboard(selected_regatta: str, roster_manager, format_event_time_func):
     """Render the regatta dashboard view with athlete x event grid"""
     import re
@@ -4263,7 +4595,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
     st.caption(f"**Athlete breakdown:** {' | '.join(breakdown_parts)}")
 
     # Legend and sort control
-    legend_col, sort_col, overview_col = st.columns([4, 1, 1])
+    legend_col, sort_col, overview_col, export_col = st.columns([3, 1, 1, 1])
     with legend_col:
         st.caption("**Hot Seat Legend:** 🟢 90+ min gap | 🟡 60-89 min | 🟠 30-59 min | 🔴 <30 min")
     with sort_col:
@@ -4284,6 +4616,24 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
     with overview_col:
         if st.button("📋 Day Overview", key="day_overview_btn"):
             st.session_state.show_minimap = True
+    with export_col:
+        if total_entries > 0:
+            from datetime import date as _date
+            day_label = day_filter if day_filter else "all"
+            safe_name = re.sub(r'[^\w\s-]', '', regatta_name).strip().replace(' ', '_')
+            export_filename = f"{safe_name}_{day_label}_day_overview_{_date.today().strftime('%Y%m%d')}.xlsx"
+            excel_bytes = generate_day_overview_excel(
+                sorted_events, events_dict, all_athletes, athlete_events,
+                athlete_colors, all_boats_used, boat_events, boat_colors,
+                dashboard_entries, format_event_time_func, regatta_name
+            )
+            st.download_button(
+                label="📥 Export",
+                data=excel_bytes,
+                file_name=export_filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="day_overview_export_btn"
+            )
 
     # Day Overview Mini-Map Dialog
     @st.dialog("Day Overview", width="large")
