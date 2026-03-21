@@ -4381,6 +4381,8 @@ def generate_competitive_outlook_excel(dashboard_entries, events_dict, roster_ma
                 raw_time = result.get('raw_time')
                 avg_age = result.get('avg_age', 0)
                 if raw_time and raw_time > 0:
+                    # Apply erg-to-water conversion (GMS times are on-water)
+                    raw_time = apply_erg_to_water(raw_time, boat_class, DEFAULT_TECH_EFFICIENCY)
                     # Derive gender from rowing seats (matches inline analysis approach)
                     genders = set()
                     for name in rowing_seats:
