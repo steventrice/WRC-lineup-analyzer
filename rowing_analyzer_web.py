@@ -4347,6 +4347,8 @@ def generate_competitive_outlook_excel(dashboard_entries, events_dict, roster_ma
         elif avg_age < 80: return "I"
         else: return "J"
 
+    boat_seat_counts = {'1x': 1, '2x': 2, '2-': 2, '4x': 4, '4+': 4, '4-': 4, '8+': 8}
+
     entry_results = []  # List of dicts with entry info + gms_pct + tier
     for entry in dashboard_entries:
         rowers = entry.get('rowers', [])
@@ -4356,6 +4358,15 @@ def generate_competitive_outlook_excel(dashboard_entries, events_dict, roster_ma
         event_name = entry.get('event_name', '')
         category_str = entry.get('category', '')
 
+        # Strip cox from rowers list for coxed boats — entries store cox as
+        # last element, but analyze_lineup should only receive rowing seats.
+        is_coxed = '+' in boat_class or boat_class == '8+'
+        expected_seats = boat_seat_counts.get(boat_class, 4)
+        if is_coxed and len(rowers) > expected_seats:
+            rowing_seats = rowers[:expected_seats]
+        else:
+            rowing_seats = rowers
+
         # Get event time from events_dict
         event_info = events_dict.get(event_num, {})
         event_time = event_info.get('time', entry.get('event_time', ''))
@@ -4364,15 +4375,15 @@ def generate_competitive_outlook_excel(dashboard_entries, events_dict, roster_ma
         gms_pct = None
         tier = 'Unrated'
         try:
-            result = analyzer.analyze_lineup(rowers, target_distance, boat_class,
+            result = analyzer.analyze_lineup(rowing_seats, target_distance, boat_class,
                                              calc_method='split', pace_predictor='power_law')
             if 'error' not in result:
                 raw_time = result.get('raw_time')
                 avg_age = result.get('avg_age', 0)
                 if raw_time and raw_time > 0:
-                    # Derive gender from roster data (matches inline analysis approach)
+                    # Derive gender from rowing seats (matches inline analysis approach)
                     genders = set()
-                    for name in rowers:
+                    for name in rowing_seats:
                         r = roster_manager.get_rower(name)
                         if r and getattr(r, 'gender', ''):
                             g = r.gender.upper()
