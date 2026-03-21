@@ -4419,7 +4419,7 @@ def generate_competitive_outlook_excel(dashboard_entries, events_dict, roster_ma
         except Exception:
             pass  # Entry stays Unrated if analysis fails entirely
 
-        lineup_str = ", ".join(rowers) if rowers else ""
+        lineup_str = ", ".join(rowing_seats) if rowing_seats else ""
         entry_results.append({
             'event_time': event_time,
             'event_name': event_name,
@@ -4428,7 +4428,7 @@ def generate_competitive_outlook_excel(dashboard_entries, events_dict, roster_ma
             'boat_class': boat_class,
             'category': category_str,
             'lineup': lineup_str,
-            'rowers': rowers,
+            'rowers': rowing_seats,
             'gms_pct': gms_pct,
             'tier': tier,
         })
