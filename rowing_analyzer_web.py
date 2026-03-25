@@ -4688,7 +4688,11 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
             events_dict[event_num]['has_entries'] = True
 
     # Fill in synthetic times (5-min spacing) for events without real times
+    # Use ALL regatta events (not just targeted) so spacing reflects the full schedule
     time_map = {e['number']: e['parsed_time'] for e in events_dict.values()}
+    for event in regatta_events_list:
+        if event.event_number not in time_map:
+            time_map[event.event_number] = parse_time_for_sort(event.event_time)
     filled_map = assign_synthetic_times(time_map)
     for evt_num, synth_time in filled_map.items():
         if evt_num in events_dict and events_dict[evt_num]['parsed_time'] is None:
@@ -4979,38 +4983,33 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
             }
             .minimap-table th {
                 background-color: #f0f0f0;
+                color: #333;
                 padding: 2px 4px;
                 font-size: 10px;
                 font-weight: normal;
                 border: 1px solid #ccc;
                 white-space: nowrap;
                 position: sticky;
-                z-index: 1;
+                z-index: 10;
                 text-align: center;
             }
             .minimap-table thead th {
                 top: 0;
-            }
-            .minimap-table thead tr.header-row-2 th {
-                top: 22px;
-            }
-            .minimap-table thead tr.header-row-3 th {
-                top: 44px;
-            }
-            .minimap-table th .minimap-time {
-                font-size: 8px;
-                color: #888;
-                font-weight: normal;
             }
             .minimap-table th .minimap-evnum {
                 font-size: 8px;
                 color: #666;
                 font-weight: normal;
             }
+            .minimap-table th .minimap-time {
+                font-size: 8px;
+                color: #888;
+                font-weight: normal;
+            }
             .minimap-table th.corner {
                 position: sticky;
                 left: 0;
-                z-index: 2;
+                z-index: 11;
                 background-color: #f0f0f0;
             }
             .minimap-table td.athlete-name {
@@ -5100,26 +5099,15 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
             <thead><tr><th class="corner"></th>
         """
 
-        # Header row 1: event shorthand
+        # Single header row with shorthand, event number, and time stacked
         for event in sorted_events:
             shorthand = get_event_shorthand(event['name'])
-            time_str = format_event_time_func(event['time']) if event['time'] else ""
-            tooltip = f"{event['name']} @ {time_str}"
-            minimap_html += f'<th title="{tooltip}">{shorthand}</th>'
-        minimap_html += "</tr>"
-
-        # Header row 2: event number
-        minimap_html += '<tr class="header-row-2"><th class="corner"></th>'
-        for event in sorted_events:
             ev_num = event['number']
-            minimap_html += f'<th><span class="minimap-evnum">{ev_num}</span></th>'
-        minimap_html += "</tr>"
-
-        # Header row 3: event time
-        minimap_html += '<tr class="header-row-3"><th class="corner"></th>'
-        for event in sorted_events:
             time_str = format_event_time_func(event['time']) if event['time'] else ""
-            minimap_html += f'<th><span class="minimap-time">{time_str}</span></th>'
+            tooltip = f"{event['name']} (#{ev_num}) @ {time_str}"
+            time_line = f'<br><span class="minimap-time">{time_str}</span>' if time_str else ""
+            minimap_html += f'<th title="{tooltip}">{shorthand}<br><span class="minimap-evnum">#{ev_num}</span>{time_line}</th>'
+
         minimap_html += "</tr></thead><tbody>"
 
         # Add athlete rows
