@@ -4003,31 +4003,42 @@ def generate_day_overview_excel(sorted_events, events_dict, all_athletes, athlet
 
     num_events = len(sorted_events)
 
-    # Row 1: event times
+    # Row 1: event names (shorthand)
     ws.cell(row=1, column=1, value="").font = bold_font
     ws.cell(row=1, column=1).fill = header_fill
     ws.cell(row=1, column=1).border = thin_border
     for col_idx, event in enumerate(sorted_events, start=2):
-        time_str = format_event_time_func(event['time']) if event['time'] else ""
-        cell = ws.cell(row=1, column=col_idx, value=time_str)
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = wrap_align
-        cell.border = thin_border
-
-    # Row 2: event names
-    ws.cell(row=2, column=1, value="").font = bold_font
-    ws.cell(row=2, column=1).fill = header_fill
-    ws.cell(row=2, column=1).border = thin_border
-    for col_idx, event in enumerate(sorted_events, start=2):
-        cell = ws.cell(row=2, column=col_idx, value=event['name'])
+        cell = ws.cell(row=1, column=col_idx, value=event['name'])
         cell.font = small_font
         cell.fill = header_fill
         cell.alignment = wrap_align
         cell.border = thin_border
 
-    # Athlete rows (starting row 3)
-    row = 3
+    # Row 2: event numbers
+    ws.cell(row=2, column=1, value="Event #").font = bold_font
+    ws.cell(row=2, column=1).fill = header_fill
+    ws.cell(row=2, column=1).border = thin_border
+    for col_idx, event in enumerate(sorted_events, start=2):
+        cell = ws.cell(row=2, column=col_idx, value=event['number'])
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = wrap_align
+        cell.border = thin_border
+
+    # Row 3: event times
+    ws.cell(row=3, column=1, value="Time").font = bold_font
+    ws.cell(row=3, column=1).fill = header_fill
+    ws.cell(row=3, column=1).border = thin_border
+    for col_idx, event in enumerate(sorted_events, start=2):
+        time_str = format_event_time_func(event['time']) if event['time'] else ""
+        cell = ws.cell(row=3, column=col_idx, value=time_str)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = wrap_align
+        cell.border = thin_border
+
+    # Athlete rows (starting row 4)
+    row = 4
     for athlete in sorted(all_athletes):
         ws.cell(row=row, column=1, value=athlete).font = bold_font
         ws.cell(row=row, column=1).alignment = left_align
@@ -4107,8 +4118,8 @@ def generate_day_overview_excel(sorted_events, events_dict, all_athletes, athlet
     for col_idx in range(2, num_events + 2):
         ws.column_dimensions[get_column_letter(col_idx)].width = 18
 
-    # Freeze panes: sticky name column + 2 header rows
-    ws.freeze_panes = 'B3'
+    # Freeze panes: sticky name column + 3 header rows
+    ws.freeze_panes = 'B4'
 
     # ===========================
     # Sheet 2: Issues Summary
@@ -4980,9 +4991,20 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
             .minimap-table thead th {
                 top: 0;
             }
+            .minimap-table thead tr.header-row-2 th {
+                top: 22px;
+            }
+            .minimap-table thead tr.header-row-3 th {
+                top: 44px;
+            }
             .minimap-table th .minimap-time {
                 font-size: 8px;
                 color: #888;
+                font-weight: normal;
+            }
+            .minimap-table th .minimap-evnum {
+                font-size: 8px;
+                color: #666;
                 font-weight: normal;
             }
             .minimap-table th.corner {
@@ -5078,14 +5100,26 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
             <thead><tr><th class="corner"></th>
         """
 
-        # Single header row with shorthand + time
+        # Header row 1: event shorthand
         for event in sorted_events:
             shorthand = get_event_shorthand(event['name'])
             time_str = format_event_time_func(event['time']) if event['time'] else ""
             tooltip = f"{event['name']} @ {time_str}"
-            time_line = f'<br><span class="minimap-time">{time_str}</span>' if time_str else ""
-            minimap_html += f'<th title="{tooltip}">{shorthand}{time_line}</th>'
+            minimap_html += f'<th title="{tooltip}">{shorthand}</th>'
+        minimap_html += "</tr>"
 
+        # Header row 2: event number
+        minimap_html += '<tr class="header-row-2"><th class="corner"></th>'
+        for event in sorted_events:
+            ev_num = event['number']
+            minimap_html += f'<th><span class="minimap-evnum">{ev_num}</span></th>'
+        minimap_html += "</tr>"
+
+        # Header row 3: event time
+        minimap_html += '<tr class="header-row-3"><th class="corner"></th>'
+        for event in sorted_events:
+            time_str = format_event_time_func(event['time']) if event['time'] else ""
+            minimap_html += f'<th><span class="minimap-time">{time_str}</span></th>'
         minimap_html += "</tr></thead><tbody>"
 
         # Add athlete rows
