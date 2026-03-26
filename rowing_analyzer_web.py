@@ -6529,8 +6529,10 @@ Clear buttons at the top of each column reset that lineup.
                 if st.button(btn_label, key=f"sel_{event.event_number}_{ev_idx}", help="Select for autofill"):
                     if is_selected:
                         st.session_state.autofill_selected_event = None
+                        st.session_state.autofill_event_select = "-- Manual Mode --"
                     else:
                         st.session_state.autofill_selected_event = event.event_number
+                        st.session_state.autofill_event_select = f"{format_event_time(event.event_time)} - {event.event_name}"
                         st.session_state.expand_autofill = True
                         event_boat = parse_event_boat_class(event.event_name)
                         if event_boat and event_boat != st.session_state.get('selected_boat_class'):
@@ -6763,16 +6765,6 @@ Clear buttons at the top of each column reset that lineup.
                     event_time_str = format_event_time(event.event_time)
                     event_label = f"{event_time_str} - {event.event_name}"
                     event_options[event_label] = event.event_number
-
-            # Find current selection's label
-            current_event_label = "-- Manual Mode --"
-            for label, evt_num in event_options.items():
-                if evt_num == st.session_state.autofill_selected_event:
-                    current_event_label = label
-                    break
-
-            # Always keep selectbox in sync with backing state
-            st.session_state.autofill_event_select = current_event_label
 
             autofill_cols = st.columns([3, 2, 2, 2, 2])
 
