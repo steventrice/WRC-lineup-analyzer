@@ -3774,6 +3774,23 @@ def load_and_reconcile_entries(regatta_events: dict) -> List[dict]:
                 f"no matching event (schedule may have changed): "
                 + ", ".join(f"Event {e['event_number']} ({e['event_name']})" for e in orphaned[:5])
             )
+            # Debug: show orphaned entry details vs loaded event keys
+            with st.expander("Debug: orphaned entry details"):
+                for e in orphaned[:5]:
+                    st.text(f"Entry: regatta={e['regatta']!r}, day={e['day']!r}, "
+                            f"event_number={e['event_number']!r}, event_name={e['event_name']!r}")
+                st.text("---")
+                loaded_event_nums = set()
+                for key, events_list in regatta_events.items():
+                    for evt in events_list:
+                        loaded_event_nums.add(evt.event_number)
+                    if len(loaded_event_nums) < 10:
+                        # Show first regatta key for reference
+                        st.text(f"Events key: {key!r}, count={len(events_list)}")
+                orphan_nums = {e['event_number'] for e in orphaned}
+                st.text(f"Orphan event numbers: {sorted(orphan_nums)}")
+                st.text(f"Loaded event numbers: {sorted(loaded_event_nums)}")
+                st.text(f"Overlap: {sorted(orphan_nums & loaded_event_nums)}")
     return entries
 
 
