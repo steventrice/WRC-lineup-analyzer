@@ -3651,7 +3651,7 @@ def reconcile_entry_events(entries: List[dict], regatta_events: dict) -> tuple:
     # Fallback: (regatta, day, event_number) — number-based match if names changed
     event_lookup = {}
     event_num_lookup = {}
-    known_regattas = set()
+    known_regatta_days = set()  # (regatta_lower, day_lower) pairs with loaded events
     for key, events_list in regatta_events.items():
         for event in events_list:
             regatta_lower = event.regatta.lower().strip()
@@ -3659,7 +3659,7 @@ def reconcile_entry_events(entries: List[dict], regatta_events: dict) -> tuple:
             name_lower = event.event_name.lower().strip()
             event_lookup[(regatta_lower, day_lower, name_lower)] = event
             event_num_lookup[(regatta_lower, day_lower, event.event_number)] = event
-            known_regattas.add(regatta_lower)
+            known_regatta_days.add((regatta_lower, day_lower))
 
     changed = []
     orphaned = []
@@ -3669,12 +3669,12 @@ def reconcile_entry_events(entries: List[dict], regatta_events: dict) -> tuple:
         entry_day = normalize_day_format(entry['day']).lower().strip()
         entry_name = entry['event_name'].lower().strip()
 
-        # Skip entries whose regatta has no events loaded — nothing to reconcile against
-        regatta_has_events = any(
-            entry_regatta == r or entry_regatta in r or r in entry_regatta
-            for r in known_regattas
+        # Skip entries whose regatta+day has no events loaded (e.g. past year's regatta)
+        day_has_events = any(
+            d == entry_day and (entry_regatta == r or entry_regatta in r or r in entry_regatta)
+            for r, d in known_regatta_days
         )
-        if not regatta_has_events:
+        if not day_has_events:
             continue
 
         # Try exact match first
@@ -3774,23 +3774,6 @@ def load_and_reconcile_entries(regatta_events: dict) -> List[dict]:
                 f"no matching event (schedule may have changed): "
                 + ", ".join(f"Event {e['event_number']} ({e['event_name']})" for e in orphaned[:5])
             )
-            # Debug: show orphaned entry details vs loaded event keys
-            with st.expander("Debug: orphaned entry details"):
-                for e in orphaned[:5]:
-                    st.text(f"Entry: regatta={e['regatta']!r}, day={e['day']!r}, "
-                            f"event_number={e['event_number']!r}, event_name={e['event_name']!r}")
-                st.text("---")
-                loaded_event_nums = set()
-                for key, events_list in regatta_events.items():
-                    for evt in events_list:
-                        loaded_event_nums.add(evt.event_number)
-                    if len(loaded_event_nums) < 10:
-                        # Show first regatta key for reference
-                        st.text(f"Events key: {key!r}, count={len(events_list)}")
-                orphan_nums = {e['event_number'] for e in orphaned}
-                st.text(f"Orphan event numbers: {sorted(orphan_nums)}")
-                st.text(f"Loaded event numbers: {sorted(loaded_event_nums)}")
-                st.text(f"Overlap: {sorted(orphan_nums & loaded_event_nums)}")
     return entries
 
 
