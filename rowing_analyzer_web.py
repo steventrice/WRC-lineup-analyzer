@@ -3637,17 +3637,20 @@ def update_entry_in_gsheet(original_entry: dict, updated_entry: dict) -> bool:
 def reconcile_entry_events(entries: List[dict], regatta_events: dict) -> tuple:
     """Reconcile saved entries against current RegattaEvent data.
 
-    Matches by (regatta, day, event_name) since event_name is the stable identity.
-    Updates event_number and event_time when they've changed.
+    Matches by (regatta, day, event_name) first, then falls back to
+    (regatta, day, event_number) if names changed.
+    Updates event_number, event_time, and event_name when they've changed.
 
     Returns: (entries, changed_entries, orphaned_entries)
     """
     if not entries or not regatta_events:
         return entries, [], []
 
-    # Build lookup: (regatta_lower, normalized_day_lower, event_name_lower) -> RegattaEvent
-    # Also track which regatta names have events loaded (for orphan detection)
+    # Build lookups for matching entries to events
+    # Primary: (regatta, day, event_name) — name-based match
+    # Fallback: (regatta, day, event_number) — number-based match if names changed
     event_lookup = {}
+    event_num_lookup = {}
     known_regattas = set()
     for key, events_list in regatta_events.items():
         for event in events_list:
@@ -3655,6 +3658,7 @@ def reconcile_entry_events(entries: List[dict], regatta_events: dict) -> tuple:
             day_lower = normalize_day_format(event.day).lower().strip()
             name_lower = event.event_name.lower().strip()
             event_lookup[(regatta_lower, day_lower, name_lower)] = event
+            event_num_lookup[(regatta_lower, day_lower, event.event_number)] = event
             known_regattas.add(regatta_lower)
 
     changed = []
@@ -3676,13 +3680,26 @@ def reconcile_entry_events(entries: List[dict], regatta_events: dict) -> tuple:
         # Try exact match first
         matched_event = event_lookup.get((entry_regatta, entry_day, entry_name))
 
-        # Try fuzzy regatta matching (partial containment)
+        # Try fuzzy regatta matching (partial containment on name)
         if matched_event is None:
             for (r, d, n), evt in event_lookup.items():
                 if d == entry_day and n == entry_name:
                     if entry_regatta in r or r in entry_regatta:
                         matched_event = evt
                         break
+
+        # Fallback: match by event_number (handles renamed events)
+        if matched_event is None:
+            entry_num = entry.get('event_number')
+            if entry_num is not None:
+                matched_event = event_num_lookup.get((entry_regatta, entry_day, entry_num))
+                # Also try fuzzy regatta matching on event_number
+                if matched_event is None:
+                    for (r, d, num), evt in event_num_lookup.items():
+                        if d == entry_day and num == entry_num:
+                            if entry_regatta in r or r in entry_regatta:
+                                matched_event = evt
+                                break
 
         if matched_event is not None:
             # Check if event_number or event_time changed
