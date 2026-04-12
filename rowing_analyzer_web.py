@@ -7681,14 +7681,16 @@ Clear buttons at the top of each column reset that lineup.
                 is_coxed = '+' in boat_class
                 rower_names = [r for r in lineup if r is not None]
                 cox_name = st.session_state.get(cox_key) if is_coxed else None
-                if cox_name:
-                    rower_names.append(cox_name)
 
                 if rower_names:
                     from datetime import datetime
-                    # Calculate new stats
+                    # Calculate avg age from rowers only (cox excluded per US Rowing rules)
                     ages = [roster_manager.rowers[name].age for name in rower_names if name in roster_manager.rowers and roster_manager.rowers[name].age]
                     avg_age = sum(ages) / len(ages) if ages else 0
+
+                    # Append cox after age calculation so they're in the entry but not the average
+                    if cox_name:
+                        rower_names.append(cox_name)
                     genders = [roster_manager.rowers[name].gender for name in rower_names if name in roster_manager.rowers]
                     lineup_gender = 'M' if all(g == 'M' for g in genders) else ('W' if all(g == 'W' for g in genders) else 'Mixed')
 
