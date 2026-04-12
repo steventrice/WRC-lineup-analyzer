@@ -7665,7 +7665,12 @@ Clear buttons at the top of each column reset that lineup.
                         old_avg = float(record.get('Avg Age', 0)) if record.get('Avg Age') else 0
                         if abs(new_avg - old_avg) < 0.05:
                             continue  # No meaningful change
-                        new_cat_letter = _masters_category(new_avg)
+                        cat_breaks = [(27,'AA'),(36,'A'),(43,'B'),(50,'C'),(55,'D'),(60,'E'),(65,'F'),(70,'G'),(75,'H'),(80,'I')]
+                        new_cat_letter = 'J'
+                        for threshold, letter in cat_breaks:
+                            if new_avg < threshold:
+                                new_cat_letter = letter
+                                break
                         # Reconstruct category with gender prefix
                         old_cat = record.get('Category', '')
                         gender_prefix = old_cat.rsplit(' ', 1)[0] if ' ' in old_cat else old_cat
