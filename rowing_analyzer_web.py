@@ -7629,6 +7629,86 @@ Clear buttons at the top of each column reset that lineup.
                         st.session_state.selected_rower = name
                     st.rerun()
 
+        # --- One-time Cox Age Repair Tool ---
+        with st.expander("Data Tools"):
+            if st.button("Repair Cox Avg Ages", use_container_width=True,
+                         help="Recalculate avg age for coxed entries, excluding the coxswain"):
+                boat_seats_repair = {'1x': 1, '2x': 2, '2-': 2, '4x': 4, '4+': 4, '4-': 4, '8+': 8}
+                corrections = []
+
+                _, worksheet = get_entries_gsheet_client()
+                if worksheet:
+                    records = worksheet.get_all_records()
+                    for idx, record in enumerate(records):
+                        bc = record.get('Boat Class', '')
+                        if '+' not in bc:
+                            continue  # Not a coxed boat
+                        expected = boat_seats_repair.get(bc, 4)
+                        lineup_str = record.get('Lineup', '')
+                        if not lineup_str:
+                            continue
+                        rowers_list = parse_lineup_string(lineup_str, bc)
+                        if len(rowers_list) <= expected:
+                            continue  # No cox in list
+                        # Cox is the last element; rowing seats are the first 'expected'
+                        cox = rowers_list[expected]
+                        rowing_names = rowers_list[:expected]
+                        # Look up ages for rowing seats only
+                        ages = []
+                        for name in rowing_names:
+                            r = roster_manager.get_rower(name)
+                            if r and r.age:
+                                ages.append(r.age)
+                        if not ages:
+                            continue
+                        new_avg = round(sum(ages) / len(ages), 1)
+                        old_avg = float(record.get('Avg Age', 0)) if record.get('Avg Age') else 0
+                        if abs(new_avg - old_avg) < 0.05:
+                            continue  # No meaningful change
+                        new_cat_letter = _masters_category(new_avg)
+                        # Reconstruct category with gender prefix
+                        old_cat = record.get('Category', '')
+                        gender_prefix = old_cat.rsplit(' ', 1)[0] if ' ' in old_cat else old_cat
+                        new_cat = f"{gender_prefix} {new_cat_letter}"
+                        row_num = idx + 2  # +2 for header + 0-index
+                        corrections.append({
+                            'row': row_num,
+                            'event': record.get('Event Name', ''),
+                            'boat': bc,
+                            'cox': cox,
+                            'old_avg': old_avg,
+                            'new_avg': new_avg,
+                            'old_cat': old_cat,
+                            'new_cat': new_cat,
+                        })
+
+                if not corrections:
+                    st.success("All entries are correct — no repairs needed.")
+                else:
+                    st.warning(f"Found {len(corrections)} entries to fix.")
+                    import pandas as pd
+                    df = pd.DataFrame(corrections)
+                    df.columns = ['Row', 'Event', 'Boat', 'Cox', 'Old Avg', 'New Avg', 'Old Cat', 'New Cat']
+                    st.dataframe(df, hide_index=True, use_container_width=True)
+
+                    if st.button("Apply Fixes to Google Sheets", type="primary", use_container_width=True):
+                        fixed = 0
+                        for c in corrections:
+                            # Avg Age is column 9, Category is column 8 (1-indexed)
+                            worksheet.update_cell(c['row'], 9, c['new_avg'])
+                            worksheet.update_cell(c['row'], 8, c['new_cat'])
+                            fixed += 1
+                        # Also update session state entries
+                        for entry in st.session_state.event_entries:
+                            for c in corrections:
+                                if (entry.get('event_name') == c['event'] and
+                                    abs(entry.get('avg_age', 0) - c['old_avg']) < 0.05):
+                                    entry['avg_age'] = c['new_avg']
+                                    entry['category'] = c['new_cat']
+                                    break
+                        st.success(f"Fixed {fixed} entries in Google Sheets.")
+                        st.rerun()
+
     # =========================================================================
     # MAIN AREA: Lineups or Dashboard (based on view mode)
     # =========================================================================
