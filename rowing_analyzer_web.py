@@ -7631,8 +7631,8 @@ Clear buttons at the top of each column reset that lineup.
 
         # --- One-time Cox Age Repair Tool ---
         with st.expander("Data Tools"):
-            if st.button("Repair Cox Avg Ages", use_container_width=True,
-                         help="Recalculate avg age for coxed entries, excluding the coxswain"):
+            if st.button("Repair Cox Entries", use_container_width=True,
+                         help="Recalculate avg age and gender for coxed entries, excluding the coxswain"):
                 boat_seats_repair = {'1x': 1, '2x': 2, '2-': 2, '4x': 4, '4+': 4, '4-': 4, '8+': 8}
                 corrections = []
 
@@ -7652,6 +7652,7 @@ Clear buttons at the top of each column reset that lineup.
                             continue
                         cox = rowers_list[expected]
                         rowing_names = rowers_list[:expected]
+                        # Recalculate age from rowers only
                         ages = []
                         for name in rowing_names:
                             r = roster_manager.get_rower(name)
@@ -7661,8 +7662,18 @@ Clear buttons at the top of each column reset that lineup.
                             continue
                         new_avg = round(sum(ages) / len(ages), 1)
                         old_avg = float(record.get('Avg Age', 0)) if record.get('Avg Age') else 0
-                        if abs(new_avg - old_avg) < 0.05:
-                            continue
+                        # Recalculate gender from rowers only
+                        rower_genders = []
+                        for name in rowing_names:
+                            r = roster_manager.get_rower(name)
+                            if r and r.gender:
+                                rower_genders.append(r.gender.upper())
+                        if all(g == 'M' for g in rower_genders):
+                            new_gender = 'M'
+                        elif all(g in ('W', 'F') for g in rower_genders):
+                            new_gender = 'W'  # Normalize F to W
+                        else:
+                            new_gender = 'Mixed'
                         cat_breaks = [(27,'AA'),(36,'A'),(43,'B'),(50,'C'),(55,'D'),(60,'E'),(65,'F'),(70,'G'),(75,'H'),(80,'I')]
                         new_cat_letter = 'J'
                         for threshold, letter in cat_breaks:
@@ -7670,8 +7681,12 @@ Clear buttons at the top of each column reset that lineup.
                                 new_cat_letter = letter
                                 break
                         old_cat = record.get('Category', '')
-                        gender_prefix = old_cat.rsplit(' ', 1)[0] if ' ' in old_cat else old_cat
-                        new_cat = f"{gender_prefix} {new_cat_letter}"
+                        new_cat = f"{new_gender} {new_cat_letter}"
+                        # Skip if nothing changed
+                        age_changed = abs(new_avg - old_avg) >= 0.05
+                        cat_changed = new_cat != old_cat
+                        if not age_changed and not cat_changed:
+                            continue
                         row_num = idx + 2
                         corrections.append({
                             'row': row_num,
@@ -7774,15 +7789,15 @@ Clear buttons at the top of each column reset that lineup.
 
                 if rower_names:
                     from datetime import datetime
-                    # Calculate avg age from rowers only (cox excluded per US Rowing rules)
+                    # Calculate avg age and gender from rowers only (cox excluded per US Rowing rules)
                     ages = [roster_manager.rowers[name].age for name in rower_names if name in roster_manager.rowers and roster_manager.rowers[name].age]
                     avg_age = sum(ages) / len(ages) if ages else 0
-
-                    # Append cox after age calculation so they're in the entry but not the average
-                    if cox_name:
-                        rower_names.append(cox_name)
                     genders = [roster_manager.rowers[name].gender for name in rower_names if name in roster_manager.rowers]
                     lineup_gender = 'M' if all(g == 'M' for g in genders) else ('W' if all(g == 'W' for g in genders) else 'Mixed')
+
+                    # Append cox after age/gender calculation so they're in the entry but not the stats
+                    if cox_name:
+                        rower_names.append(cox_name)
 
                     updated_entry = {
                         'regatta': editing_entry['regatta'],
