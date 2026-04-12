@@ -7636,24 +7636,22 @@ Clear buttons at the top of each column reset that lineup.
                 boat_seats_repair = {'1x': 1, '2x': 2, '2-': 2, '4x': 4, '4+': 4, '4-': 4, '8+': 8}
                 corrections = []
 
-                _, worksheet = get_entries_gsheet_client()
-                if worksheet:
-                    records = worksheet.get_all_records()
+                _, ws = get_entries_gsheet_client()
+                if ws:
+                    records = ws.get_all_records()
                     for idx, record in enumerate(records):
                         bc = record.get('Boat Class', '')
                         if '+' not in bc:
-                            continue  # Not a coxed boat
+                            continue
                         expected = boat_seats_repair.get(bc, 4)
                         lineup_str = record.get('Lineup', '')
                         if not lineup_str:
                             continue
                         rowers_list = parse_lineup_string(lineup_str, bc)
                         if len(rowers_list) <= expected:
-                            continue  # No cox in list
-                        # Cox is the last element; rowing seats are the first 'expected'
+                            continue
                         cox = rowers_list[expected]
                         rowing_names = rowers_list[:expected]
-                        # Look up ages for rowing seats only
                         ages = []
                         for name in rowing_names:
                             r = roster_manager.get_rower(name)
@@ -7664,18 +7662,17 @@ Clear buttons at the top of each column reset that lineup.
                         new_avg = round(sum(ages) / len(ages), 1)
                         old_avg = float(record.get('Avg Age', 0)) if record.get('Avg Age') else 0
                         if abs(new_avg - old_avg) < 0.05:
-                            continue  # No meaningful change
+                            continue
                         cat_breaks = [(27,'AA'),(36,'A'),(43,'B'),(50,'C'),(55,'D'),(60,'E'),(65,'F'),(70,'G'),(75,'H'),(80,'I')]
                         new_cat_letter = 'J'
                         for threshold, letter in cat_breaks:
                             if new_avg < threshold:
                                 new_cat_letter = letter
                                 break
-                        # Reconstruct category with gender prefix
                         old_cat = record.get('Category', '')
                         gender_prefix = old_cat.rsplit(' ', 1)[0] if ' ' in old_cat else old_cat
                         new_cat = f"{gender_prefix} {new_cat_letter}"
-                        row_num = idx + 2  # +2 for header + 0-index
+                        row_num = idx + 2
                         corrections.append({
                             'row': row_num,
                             'event': record.get('Event Name', ''),
@@ -7687,6 +7684,13 @@ Clear buttons at the top of each column reset that lineup.
                             'new_cat': new_cat,
                         })
 
+                # Store in session state so it persists across reruns
+                st.session_state['cox_repair_corrections'] = corrections
+                st.session_state['cox_repair_ws'] = ws
+
+            # Show results from session state (survives rerun)
+            corrections = st.session_state.get('cox_repair_corrections')
+            if corrections is not None:
                 if not corrections:
                     st.success("All entries are correct — no repairs needed.")
                 else:
@@ -7697,22 +7701,23 @@ Clear buttons at the top of each column reset that lineup.
                     st.dataframe(df, hide_index=True, use_container_width=True)
 
                     if st.button("Apply Fixes to Google Sheets", type="primary", use_container_width=True):
-                        fixed = 0
-                        for c in corrections:
-                            # Avg Age is column 9, Category is column 8 (1-indexed)
-                            worksheet.update_cell(c['row'], 9, c['new_avg'])
-                            worksheet.update_cell(c['row'], 8, c['new_cat'])
-                            fixed += 1
-                        # Also update session state entries
-                        for entry in st.session_state.event_entries:
+                        _, ws = get_entries_gsheet_client()
+                        if ws:
+                            fixed = 0
                             for c in corrections:
-                                if (entry.get('event_name') == c['event'] and
-                                    abs(entry.get('avg_age', 0) - c['old_avg']) < 0.05):
-                                    entry['avg_age'] = c['new_avg']
-                                    entry['category'] = c['new_cat']
-                                    break
-                        st.success(f"Fixed {fixed} entries in Google Sheets.")
-                        st.rerun()
+                                ws.update_cell(c['row'], 9, c['new_avg'])
+                                ws.update_cell(c['row'], 8, c['new_cat'])
+                                fixed += 1
+                            for entry in st.session_state.event_entries:
+                                for c in corrections:
+                                    if (entry.get('event_name') == c['event'] and
+                                        abs(entry.get('avg_age', 0) - c['old_avg']) < 0.05):
+                                        entry['avg_age'] = c['new_avg']
+                                        entry['category'] = c['new_cat']
+                                        break
+                            st.success(f"Fixed {fixed} entries in Google Sheets.")
+                            del st.session_state['cox_repair_corrections']
+                            st.session_state.pop('cox_repair_ws', None)
 
     # =========================================================================
     # MAIN AREA: Lineups or Dashboard (based on view mode)
