@@ -7257,13 +7257,6 @@ Clear buttons at the top of each column reset that lineup.
     # =========================================================================
 
     with st.sidebar:
-        # Temporary debug display
-        with st.expander("Debug: Load Log", expanded=False):
-            st.caption(f"Rowers loaded: {len(roster_manager.rowers)}")
-            st.caption(f"Sheets: {getattr(roster_manager, '_debug_sheets', 'N/A')}")
-            for line in roster_manager.load_log:
-                st.text(line)
-
         st.header("Roster")
 
         # Sort selection
