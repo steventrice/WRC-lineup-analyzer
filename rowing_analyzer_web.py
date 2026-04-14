@@ -327,28 +327,6 @@ def normalize_time_format(time_str: str) -> str:
         return time_str
 
 
-_DAY_NAMES_RE = re.compile(r'\b(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday)\b', re.IGNORECASE)
-
-def _strip_day_names(s: str) -> str:
-    """Strip day-of-week names from a string for fuzzy regatta matching."""
-    return _DAY_NAMES_RE.sub('', s).strip()
-
-def _regatta_names_match(name1: str, name2: str) -> bool:
-    """Check if two regatta names refer to the same regatta.
-
-    Uses substring matching, then falls back to substring matching
-    after stripping day-of-week names (so 'Cascadia Saturday' matches
-    'Cascadia Masters').
-    """
-    n1, n2 = name1.lower(), name2.lower()
-    if n1 in n2 or n2 in n1:
-        return True
-    # Strip day names and retry (e.g. "Cascadia Saturday" -> "Cascadia")
-    s1, s2 = _strip_day_names(n1), _strip_day_names(n2)
-    if s1 and s2 and (s1 in s2 or s2 in s1):
-        return True
-    return False
-
 def normalize_day_format(day_str: str) -> str:
     """Normalize day to standard format: 'Sunday, March 8, 2026' (no leading zero on day)
 
@@ -1240,9 +1218,7 @@ class RosterManager:
 
             if any(kw in col_str for kw in exclude_keywords):
                 if not day_pattern.match(str(col)):
-                    # Don't exclude if column also matches a regatta keyword
-                    if not any(word in col_str for word in regatta_keywords):
-                        continue
+                    continue
             if col_str.strip() == '' or col_str == 'nan':
                 continue
 
@@ -2478,31 +2454,18 @@ class LineupOptimizer:
             regatta_lower = regatta_for_filter.lower()
             rower_names = []
             for name, rower in self.roster.rowers.items():
-                # If day is specified, check day-specific signup first
+                # If day is specified, check day-specific signup
                 if day_for_filter:
                     found = False
-                    has_day_keys = False
                     for signup_key, attending in rower.regatta_signups.items():
-                        if "|" in signup_key:
+                        if attending and "|" in signup_key:
                             signup_regatta, signup_day = signup_key.rsplit("|", 1)
-                            if _regatta_names_match(regatta_for_filter, signup_regatta):
-                                has_day_keys = True
-                                if attending and signup_day.lower() == day_for_filter.lower():
-                                    found = True
-                                    break
+                            if (signup_day.lower() == day_for_filter.lower() and
+                                (regatta_lower in signup_regatta.lower() or signup_regatta.lower() in regatta_lower)):
+                                found = True
+                                break
                     if found:
                         rower_names.append(name)
-                    elif not has_day_keys:
-                        # No day-specific signup columns - fall back to base regatta match
-                        if rower.is_attending(regatta_for_filter):
-                            rower_names.append(name)
-                        else:
-                            for signup_regatta, attending in rower.regatta_signups.items():
-                                if "|" in signup_regatta:
-                                    continue
-                                if attending and _regatta_names_match(regatta_for_filter, signup_regatta):
-                                    rower_names.append(name)
-                                    break
                 else:
                     # No day filter - match any attendance for this regatta
                     if rower.is_attending(regatta_for_filter):
@@ -2511,7 +2474,8 @@ class LineupOptimizer:
                         for signup_regatta, attending in rower.regatta_signups.items():
                             if "|" in signup_regatta:
                                 continue  # Skip day-specific keys
-                            if attending and _regatta_names_match(regatta_for_filter, signup_regatta):
+                            if attending and (regatta_lower in signup_regatta.lower() or
+                                             signup_regatta.lower() in regatta_lower):
                                 rower_names.append(name)
                                 break
 
@@ -5569,25 +5533,23 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
         def is_attending_regatta(rower, regatta_check, day_name=None):
             # If day is specified, try day-specific key first
             if day_name:
-                has_day_keys = False
                 for signup_key, attending in rower.regatta_signups.items():
-                    if "|" in signup_key:
+                    if attending and "|" in signup_key:
                         signup_regatta, signup_day = signup_key.rsplit("|", 1)
-                        if _regatta_names_match(regatta_check, signup_regatta):
-                            has_day_keys = True
-                            if attending and signup_day.lower() == day_name.lower():
-                                return True
-                if has_day_keys:
-                    return False
-                # No day-specific signup columns - fall through to base regatta match
+                        regatta_lower = regatta_check.lower()
+                        if (signup_day.lower() == day_name.lower() and
+                            (regatta_lower in signup_regatta.lower() or signup_regatta.lower() in regatta_lower)):
+                            return True
+                return False
 
-            # No day filter or no day-specific columns - match any attendance
+            # No day filter - match any attendance
             if rower.is_attending(regatta_check):
                 return True
+            regatta_lower = regatta_check.lower()
             for signup_regatta, attending in rower.regatta_signups.items():
                 if "|" in signup_regatta:
                     continue  # Skip day-specific keys
-                if attending and _regatta_names_match(regatta_check, signup_regatta):
+                if attending and (regatta_lower in signup_regatta.lower() or signup_regatta.lower() in regatta_lower):
                     return True
             return False
 
@@ -6234,7 +6196,7 @@ Clear buttons at the top of each column reset that lineup.
         # Check if any signup regatta matches this events regatta (partial match)
         for col in roster_manager.regattas:
             display = roster_manager.regatta_display_names.get(col, col)
-            if _regatta_names_match(regatta_name, display):
+            if regatta_name.lower() in display.lower() or display.lower() in regatta_name.lower():
                 regattas_with_events.add(col)
 
     # Add events tab entries FIRST (regattas with events are priority)
@@ -7386,6 +7348,8 @@ Clear buttons at the top of each column reset that lineup.
 
             # Try exact match first, then partial match for events tab regattas
             def is_attending_regatta(rower, regatta_name, day_name=None):
+                regatta_lower = regatta_name.lower()
+
                 # If day is specified, try day-specific key first
                 if day_name:
                     # Check if this regatta has ANY day-specific signup keys
@@ -7393,7 +7357,7 @@ Clear buttons at the top of each column reset that lineup.
                     for signup_key in rower.regatta_signups.keys():
                         if "|" in signup_key:
                             signup_regatta, _ = signup_key.rsplit("|", 1)
-                            if _regatta_names_match(regatta_name, signup_regatta):
+                            if (regatta_lower in signup_regatta.lower() or signup_regatta.lower() in regatta_lower):
                                 has_day_specific_keys = True
                                 break
 
@@ -7403,7 +7367,7 @@ Clear buttons at the top of each column reset that lineup.
                             if attending and "|" in signup_key:
                                 signup_regatta, signup_day = signup_key.rsplit("|", 1)
                                 if (signup_day.lower() == day_name.lower() and
-                                    _regatta_names_match(regatta_name, signup_regatta)):
+                                    (regatta_lower in signup_regatta.lower() or signup_regatta.lower() in regatta_lower)):
                                     return True
                         return False
                     else:
@@ -7420,7 +7384,7 @@ Clear buttons at the top of each column reset that lineup.
                     # Skip day-specific keys for general regatta matching
                     if "|" in signup_regatta:
                         continue
-                    if attending and _regatta_names_match(regatta_name, signup_regatta):
+                    if attending and (regatta_lower in signup_regatta.lower() or signup_regatta.lower() in regatta_lower):
                         return True
                 return False
 
