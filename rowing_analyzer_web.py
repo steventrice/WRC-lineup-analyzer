@@ -576,6 +576,14 @@ def parse_event_gender(event_name: str) -> Optional[str]:
         return 'W'
     elif 'men' in name_lower or "men's" in name_lower:
         return 'M'
+    # Handle abbreviated prefixes like "W D 8+", "M C 4+", "X B 2x"
+    stripped = event_name.strip()
+    if re.match(r'^[Ww]\b', stripped):
+        return 'W'
+    elif re.match(r'^[Mm]\b', stripped):
+        return 'M'
+    elif re.match(r'^[Xx]\b', stripped):
+        return 'Mix'
     return None
 
 
@@ -1160,9 +1168,9 @@ class RosterManager:
             for col in ['GR', 'Gender', 'Sex']:
                 if col in row and pd.notna(row[col]):
                     gender = str(row[col]).strip().upper()
-                    if gender in ['MALE', 'M']:
+                    if gender in ['MALE', 'M', 'MEN']:
                         gender = 'M'
-                    elif gender in ['FEMALE', 'F']:
+                    elif gender in ['FEMALE', 'F', 'W', 'WOMEN', 'WOMAN']:
                         gender = 'F'
                     break
 
@@ -3093,6 +3101,16 @@ class LineupOptimizer:
             men_count = sum(1 for r in rowers if r.gender == 'M')
             women_count = sum(1 for r in rowers if r.gender == 'F')
             if men_count != women_count:
+                if debug_counts is not None:
+                    debug_counts['gender_rejected'] = debug_counts.get('gender_rejected', 0) + 1
+                return None
+        elif gender == "Men's":
+            if any(r.gender != 'M' for r in rowers):
+                if debug_counts is not None:
+                    debug_counts['gender_rejected'] = debug_counts.get('gender_rejected', 0) + 1
+                return None
+        elif gender == "Women's":
+            if any(r.gender != 'F' for r in rowers):
                 if debug_counts is not None:
                     debug_counts['gender_rejected'] = debug_counts.get('gender_rejected', 0) + 1
                 return None
@@ -6776,6 +6794,11 @@ Clear buttons at the top of each column reset that lineup.
         with st.expander("⚡ Autofill Lineup", expanded=autofill_expanded):
             # Build event dropdown options
             events = roster_manager.regatta_events.get(selected_regatta, [])
+            # Clear stale event number if it doesn't exist in the current regatta
+            if st.session_state.autofill_selected_event is not None:
+                if not any(e.event_number == st.session_state.autofill_selected_event for e in events):
+                    st.session_state.autofill_selected_event = None
+                    st.session_state.autofill_event_select = "-- Manual Mode --"
             event_options = {"-- Manual Mode --": None}  # None = manual mode
             for event in events:
                 if event.include:  # Only targeted events
@@ -6918,7 +6941,7 @@ Clear buttons at the top of each column reset that lineup.
                 with excl_cols[0]:
                     if st.button("Exclude Women", key="bulk_excl_women", use_container_width=True):
                         for rname, rdata in roster_manager.rowers.items():
-                            is_woman = getattr(rdata, 'gender', '').upper() == 'F'
+                            is_woman = getattr(rdata, 'gender', '').upper() in ('F', 'W')
                             if is_woman:
                                 st.session_state.excluded_rowers.add(rname)
                             st.session_state[f"exclude_{rname}"] = is_woman or rname in st.session_state.excluded_rowers
@@ -7688,6 +7711,7 @@ Clear buttons at the top of each column reset that lineup.
                     ages = [roster_manager.rowers[name].age for name in rower_names if name in roster_manager.rowers and roster_manager.rowers[name].age]
                     avg_age = sum(ages) / len(ages) if ages else 0
                     genders = [roster_manager.rowers[name].gender for name in rower_names if name in roster_manager.rowers]
+                    genders = ['W' if g == 'F' else g for g in genders]
                     lineup_gender = 'M' if all(g == 'M' for g in genders) else ('W' if all(g == 'W' for g in genders) else 'Mixed')
 
                     # Append cox after age/gender calculation so they're in the entry but not the stats
