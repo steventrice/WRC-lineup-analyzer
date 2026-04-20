@@ -6067,7 +6067,7 @@ The app will adjust seat positions and split calculations automatically.
 - Expand the "Autofill" panel
 - Select an event from the dropdown (auto-applies gender/age constraints), or use Manual Mode
 - Choose target lineup column (A, B, C, or All)
-- Click "Fill Fastest Raw" for pure speed, or "Fill For Category" to meet age requirements
+- Click "Fill Fastest Raw" for pure speed, or "Fill With Handicaps" to meet age requirements
 """)
 
         with st.expander("**4. Assign Cox & Boat**", expanded=False):
@@ -6921,7 +6921,7 @@ Clear buttons at the top of each column reset that lineup.
                         adj_help = f"Find best handicap-adjusted lineup with avg age {autofill_min_avg_age}–{max_age - 1}"
                     else:
                         adj_help = f"Find best handicap-adjusted lineup meeting age (≥{autofill_min_avg_age})"
-                    autofill_adj_clicked = st.button("⚡ Fill For Category", use_container_width=True,
+                    autofill_adj_clicked = st.button("⚡ Fill With Handicaps", use_container_width=True,
                                                       help=adj_help)
                 else:
                     autofill_adj_clicked = st.button("⚡ Fill Fastest Adj", use_container_width=True,
