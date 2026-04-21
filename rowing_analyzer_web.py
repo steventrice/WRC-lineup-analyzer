@@ -7877,17 +7877,20 @@ Clear buttons at the top of each column reset that lineup.
 
             current_boat = st.session_state.get(boat_key)
             boat_options = ["(No boat assigned)"] + roster_manager.club_boats
-            current_boat_idx = 0
-            if current_boat and current_boat in roster_manager.club_boats:
-                current_boat_idx = roster_manager.club_boats.index(current_boat) + 1
+            # Initialize the widget key from boat state if not already set
+            widget_key = f"boat_select_{key}"
+            if widget_key not in st.session_state:
+                if current_boat and current_boat in roster_manager.club_boats:
+                    st.session_state[widget_key] = current_boat
+                else:
+                    st.session_state[widget_key] = "(No boat assigned)"
 
             boat_cols = st.columns([5, 1])
             with boat_cols[0]:
                 selected_boat = st.selectbox(
                     "Boat",
                     options=boat_options,
-                    index=current_boat_idx,
-                    key=f"boat_select_{key}",
+                    key=widget_key,
                     label_visibility="collapsed"
                 )
                 # Update session state if changed
