@@ -4643,6 +4643,313 @@ def generate_competitive_outlook_excel(dashboard_entries, events_dict, roster_ma
     return buf.getvalue()
 
 
+def render_find_available_athletes(
+    event_num,
+    event_name: str,
+    event_time,  # parsed datetime or None
+    roster_manager,
+    selected_regatta: str,
+    dashboard_entries: list,
+    events_dict: dict,
+    edit_mode: bool = False,
+    key_suffix: str = ''
+):
+    """Render the available athletes panel for a given event.
+
+    Used by both the dashboard and sandbox edit mode.
+    """
+    # Parse event requirements from name
+    event_gender = parse_event_gender(event_name)
+    event_boat = parse_event_boat_class(event_name)
+    event_category = parse_event_category(event_name)
+
+    st.caption(f"**Event:** {event_name}")
+    st.caption(f"**Detected:** Gender={event_gender or 'Any'}, Boat={event_boat or 'Any'}, Category={event_category or 'Any'}")
+
+    # For coxed boats, allow including all genders (cox can be any gender)
+    include_all_genders = False
+    if event_boat and '+' in event_boat:
+        include_all_genders = st.checkbox("Include all genders (for cox)", key=f"cox_all_genders{key_suffix}")
+
+    # Get all rowers signed up for this regatta (and day if specified)
+    regatta_name = selected_regatta.split("|")[0] if "|" in selected_regatta else selected_regatta
+    day_for_filter = selected_regatta.split("|")[1] if "|" in selected_regatta else None
+    if day_for_filter:
+        day_for_filter = day_for_filter.split(",")[0].split()[0].strip()
+
+    def is_attending_regatta(rower, regatta_check, day_name=None):
+        if day_name:
+            for signup_key, attending in rower.regatta_signups.items():
+                if attending and "|" in signup_key:
+                    signup_regatta, signup_day = signup_key.rsplit("|", 1)
+                    regatta_lower = regatta_check.lower()
+                    if (signup_day.lower() == day_name.lower() and
+                        (regatta_lower in signup_regatta.lower() or signup_regatta.lower() in regatta_lower)):
+                        return True
+            return False
+        if rower.is_attending(regatta_check):
+            return True
+        regatta_lower = regatta_check.lower()
+        for signup_regatta, attending in rower.regatta_signups.items():
+            if "|" in signup_regatta:
+                continue
+            if attending and (regatta_lower in signup_regatta.lower() or signup_regatta.lower() in regatta_lower):
+                return True
+        return False
+
+    # Get athletes already in this event
+    athletes_in_event = []
+    for entry in dashboard_entries:
+        if entry.get('event_number') == event_num:
+            for rower in entry.get('rowers', []):
+                athletes_in_event.append(rower)
+
+    # Filter available athletes
+    available_athletes = []
+    for name, rower in roster_manager.rowers.items():
+        if not is_attending_regatta(rower, regatta_name, day_for_filter):
+            continue
+        if is_name_in_list(name, athletes_in_event):
+            continue
+        if event_gender and not include_all_genders:
+            if event_gender == 'Mixed':
+                pass
+            elif event_gender == 'M' and rower.gender != 'M':
+                continue
+            elif event_gender == 'W' and rower.gender != 'F':
+                continue
+        if event_category and rower.age:
+            category_min_ages = {'AA': 0, 'A': 27, 'B': 36, 'C': 43, 'D': 50, 'E': 55, 'F': 60, 'G': 65, 'H': 70, 'I': 75, 'J': 80}
+            event_min_age = category_min_ages.get(event_category, 0)
+            if rower.age < event_min_age:
+                continue
+
+        hot_seat_color = "🟢"
+        min_gap_minutes = None
+        if event_time:
+            athlete_event_times = []
+            for entry in dashboard_entries:
+                entry_rowers = entry.get('rowers', [])
+                if is_name_in_list(name, entry_rowers):
+                    entry_event_num = entry.get('event_number')
+                    entry_event_info = events_dict.get(entry_event_num, {})
+                    entry_event_time = entry_event_info.get('parsed_time')
+                    if entry_event_time:
+                        athlete_event_times.append(entry_event_time)
+            if athlete_event_times:
+                min_gap = float('inf')
+                for existing_time in athlete_event_times:
+                    gap = abs((event_time - existing_time).total_seconds() / 60)
+                    if gap < min_gap:
+                        min_gap = gap
+                min_gap_minutes = min_gap
+                if min_gap < 30:
+                    hot_seat_color = "🔴"
+                elif min_gap < 60:
+                    hot_seat_color = "🟠"
+                elif min_gap < 90:
+                    hot_seat_color = "🟡"
+
+        erg_info = ""
+        erg_time_seconds = None
+        if rower.scores:
+            score_1k = rower.scores.get(1000)
+            if score_1k:
+                mins = int(score_1k.time_seconds // 60)
+                secs = score_1k.time_seconds % 60
+                erg_info = f"1k: {mins}:{secs:04.1f}"
+                erg_time_seconds = score_1k.time_seconds
+            else:
+                for dist, score in rower.scores.items():
+                    mins = int(score.time_seconds // 60)
+                    secs = score.time_seconds % 60
+                    erg_info = f"{dist}m: {mins}:{secs:04.1f}"
+                    erg_time_seconds = score.time_seconds
+                    break
+
+        events_count = sum(1 for e in dashboard_entries if is_name_in_list(name, e.get('rowers', [])))
+        available_athletes.append({
+            'name': name,
+            'rower': rower,
+            'hot_seat_color': hot_seat_color,
+            'min_gap': min_gap_minutes,
+            'erg_info': erg_info,
+            'erg_time_seconds': erg_time_seconds,
+            'age': rower.age,
+            'gender': rower.gender,
+            'events_entered': events_count
+        })
+
+    # Sort state key with suffix to avoid collisions
+    sort_state_key = f'available_athletes_secondary_sort{key_suffix}'
+    if sort_state_key not in st.session_state:
+        st.session_state[sort_state_key] = 'name'
+
+    color_order = {'🟢': 0, '🟡': 1, '🟠': 2, '🔴': 3}
+    sort_mode = st.session_state[sort_state_key]
+
+    if sort_mode == 'age_desc':
+        available_athletes.sort(key=lambda a: (
+            color_order.get(a['hot_seat_color'], 4), a['age'] is None, -(a['age'] or 0), a['name']))
+    elif sort_mode == 'age_asc':
+        available_athletes.sort(key=lambda a: (
+            color_order.get(a['hot_seat_color'], 4), a['age'] is None, a['age'] or 999, a['name']))
+    elif sort_mode == 'erg_asc':
+        available_athletes.sort(key=lambda a: (
+            color_order.get(a['hot_seat_color'], 4), a['erg_time_seconds'] is None, a['erg_time_seconds'] or float('inf'), a['name']))
+    elif sort_mode == 'erg_desc':
+        available_athletes.sort(key=lambda a: (
+            color_order.get(a['hot_seat_color'], 4), a['erg_time_seconds'] is None, -(a['erg_time_seconds'] or 0), a['name']))
+    else:
+        available_athletes.sort(key=lambda a: (color_order.get(a['hot_seat_color'], 4), a['name']))
+
+    if not available_athletes:
+        st.info("No available athletes found for this event. Check eligibility requirements or regatta signups.")
+        return
+
+    # Header row with sort buttons
+    header_cols = st.columns([0.5, 2, 1, 1, 1.5, 0.5])
+    with header_cols[0]:
+        st.caption("")
+    with header_cols[1]:
+        st.caption("Athlete")
+    with header_cols[2]:
+        if sort_mode == 'age_desc':
+            age_label = "**Age ↓**"
+        elif sort_mode == 'age_asc':
+            age_label = "**Age ↑**"
+        else:
+            age_label = "Age"
+        if st.button(age_label, key=f"sort_age{key_suffix}", use_container_width=True):
+            if sort_mode == 'age_desc':
+                st.session_state[sort_state_key] = 'age_asc'
+            else:
+                st.session_state[sort_state_key] = 'age_desc'
+            st.rerun()
+    with header_cols[3]:
+        st.caption("Time Gap")
+    with header_cols[4]:
+        if sort_mode == 'erg_asc':
+            erg_label = "**Erg ↑**"
+        elif sort_mode == 'erg_desc':
+            erg_label = "**Erg ↓**"
+        else:
+            erg_label = "Erg"
+        if st.button(erg_label, key=f"sort_erg{key_suffix}", use_container_width=True):
+            if sort_mode == 'erg_asc':
+                st.session_state[sort_state_key] = 'erg_desc'
+            else:
+                st.session_state[sort_state_key] = 'erg_asc'
+            st.rerun()
+    with header_cols[5]:
+        st.caption("")
+
+    st.markdown("---")
+
+    # Initialize selection state
+    sel_state_key = f'selected_athletes{key_suffix}'
+    if sel_state_key not in st.session_state:
+        st.session_state[sel_state_key] = set()
+
+    boat_seats = {'1x': 1, '2x': 2, '2-': 2, '4x': 4, '4+': 4, '4-': 4, '8+': 8}
+    max_seats = boat_seats.get(event_boat, 8) if event_boat else 8
+
+    selected_for_event = []
+    for athlete in available_athletes:
+        checkbox_key = f"select_{athlete['name']}_{event_num}{key_suffix}"
+        if st.session_state.get(checkbox_key, False):
+            if len(selected_for_event) < max_seats:
+                selected_for_event.append(athlete['name'])
+                st.session_state[sel_state_key].add(athlete['name'])
+            else:
+                st.session_state[checkbox_key] = False
+                st.session_state[sel_state_key].discard(athlete['name'])
+        else:
+            st.session_state[sel_state_key].discard(athlete['name'])
+
+    has_selection = len(selected_for_event) > 0
+
+    def clear_all_selections():
+        st.session_state[sel_state_key].clear()
+        for athlete in available_athletes:
+            checkbox_key = f"select_{athlete['name']}_{event_num}{key_suffix}"
+            if checkbox_key in st.session_state:
+                st.session_state[checkbox_key] = False
+
+    def add_to_lineup(lineup_key, lineup_name):
+        lineup = st.session_state[lineup_key]
+        added_count = 0
+        for name in selected_for_event:
+            for i in range(len(lineup)):
+                if lineup[i] is None:
+                    st.session_state[lineup_key][i] = name
+                    added_count += 1
+                    break
+        clear_all_selections()
+        if added_count > 0:
+            st.toast(f"Added {added_count} athlete(s) to {lineup_name}")
+        if added_count < len(selected_for_event):
+            st.toast(f":warning: {lineup_name} is full — only added {added_count} of {len(selected_for_event)}")
+        st.rerun()
+
+    if edit_mode:
+        # Edit mode: single "Add to Entry" button
+        btn_col1, btn_col2 = st.columns([3, 1])
+        with btn_col1:
+            if st.button("➕ Add to Entry", key=f"add_sel_to_a{key_suffix}", use_container_width=True, disabled=not has_selection, type="primary"):
+                add_to_lineup('lineup_a', 'Lineup A')
+        with btn_col2:
+            if st.button("✖ Clear", key=f"clear_sel{key_suffix}", use_container_width=True, disabled=not has_selection):
+                clear_all_selections()
+                st.rerun()
+    else:
+        # Normal mode: A/B/C lineup buttons
+        btn_col1, btn_col2, btn_col3, btn_col4 = st.columns(4)
+        is_editing = st.session_state.get('editing_entry') is not None
+        with btn_col1:
+            btn_a_label = "➕ Add to Entry" if is_editing else "➕ Lineup A"
+            if st.button(btn_a_label, key=f"add_sel_to_a{key_suffix}", use_container_width=True, disabled=not has_selection, type="primary" if is_editing else "secondary"):
+                add_to_lineup('lineup_a', 'Lineup A')
+        with btn_col2:
+            if st.button("➕ Lineup B", key=f"add_sel_to_b{key_suffix}", use_container_width=True, disabled=not has_selection or is_editing):
+                add_to_lineup('lineup_b', 'Lineup B')
+        with btn_col3:
+            if st.button("➕ Lineup C", key=f"add_sel_to_c{key_suffix}", use_container_width=True, disabled=not has_selection or is_editing):
+                add_to_lineup('lineup_c', 'Lineup C')
+        with btn_col4:
+            if st.button("✖ Clear", key=f"clear_sel{key_suffix}", use_container_width=True, disabled=not has_selection):
+                clear_all_selections()
+                st.rerun()
+
+    selection_info = f" ({len(selected_for_event)}/{max_seats} selected)" if selected_for_event else ""
+    st.success(f"**{len(available_athletes)} available athletes**{selection_info}")
+
+    # Display as a compact table with checkboxes
+    for athlete in available_athletes:
+        col1, col2, col3, col4, col5, col6 = st.columns([0.5, 2, 1, 1, 1.5, 0.5])
+        with col1:
+            st.markdown(athlete['hot_seat_color'])
+        with col2:
+            events_badge = f" ({athlete['events_entered']})" if athlete['events_entered'] > 0 else ""
+            st.markdown(f"**{athlete['name']}**{events_badge}")
+        with col3:
+            gender_display = "♀" if athlete['gender'] == 'F' else "♂"
+            st.caption(f"{gender_display} {athlete['age'] or '-'}y")
+        with col4:
+            if athlete['min_gap'] is not None:
+                st.caption(f"{int(athlete['min_gap'])}min gap")
+            else:
+                st.caption("No events")
+        with col5:
+            st.caption(athlete['erg_info'] or "No erg")
+        with col6:
+            is_selected = athlete['name'] in selected_for_event
+            at_max = len(selected_for_event) >= max_seats
+            st.checkbox("", key=f"select_{athlete['name']}_{event_num}{key_suffix}",
+                       disabled=(at_max and not is_selected),
+                       label_visibility="collapsed")
+
+
 def render_dashboard(selected_regatta: str, roster_manager, format_event_time_func):
     """Render the regatta dashboard view with athlete x event grid"""
     import re
@@ -5517,12 +5824,8 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
         event_name = selected_event_for_fill['name']
         event_time = selected_event_for_fill.get('parsed_time')
 
-        # Parse event requirements from name
-        event_gender = parse_event_gender(event_name)  # 'M', 'W', 'Mixed', or None
-        event_boat = parse_event_boat_class(event_name)  # '8+', '4+', etc or None
-        event_category = parse_event_category(event_name)  # 'AA', 'A', 'B', etc or None
-
         # Auto-switch boat class and clear lineups if event changed
+        event_boat = parse_event_boat_class(event_name)
         valid_boats = ["1x", "2x", "2-", "4x", "4+", "4-", "8+"]
         last_event_key = 'last_find_athletes_event'
 
@@ -5539,336 +5842,17 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
             st.rerun()
         st.session_state[last_event_key] = event_num
 
-        st.caption(f"**Event:** {event_name}")
-        st.caption(f"**Detected:** Gender={event_gender or 'Any'}, Boat={event_boat or 'Any'}, Category={event_category or 'Any'}")
-
-        # For coxed boats, allow including all genders (cox can be any gender)
-        include_all_genders = False
-        if event_boat and '+' in event_boat:
-            include_all_genders = st.checkbox("Include all genders (for cox)", key="cox_all_genders")
-
-        # Get all rowers signed up for this regatta (and day if specified)
-        regatta_for_filter = regatta_name  # Use the regatta name from earlier in function
-        # Extract day from selected_regatta if present (format: "RegattaName|Day")
-        day_for_filter = selected_regatta.split("|")[1] if "|" in selected_regatta else None
-        # Extract just the day of week from full date string (e.g., "Friday, June 20, 2025" -> "Friday")
-        if day_for_filter:
-            day_for_filter = day_for_filter.split(",")[0].split()[0].strip()
-
-        def is_attending_regatta(rower, regatta_check, day_name=None):
-            # If day is specified, try day-specific key first
-            if day_name:
-                for signup_key, attending in rower.regatta_signups.items():
-                    if attending and "|" in signup_key:
-                        signup_regatta, signup_day = signup_key.rsplit("|", 1)
-                        regatta_lower = regatta_check.lower()
-                        if (signup_day.lower() == day_name.lower() and
-                            (regatta_lower in signup_regatta.lower() or signup_regatta.lower() in regatta_lower)):
-                            return True
-                return False
-
-            # No day filter - match any attendance
-            if rower.is_attending(regatta_check):
-                return True
-            regatta_lower = regatta_check.lower()
-            for signup_regatta, attending in rower.regatta_signups.items():
-                if "|" in signup_regatta:
-                    continue  # Skip day-specific keys
-                if attending and (regatta_lower in signup_regatta.lower() or signup_regatta.lower() in regatta_lower):
-                    return True
-            return False
-
-        # Get athletes already in this event
-        athletes_in_event = []
-        for entry in dashboard_entries:
-            if entry.get('event_number') == event_num:
-                for rower in entry.get('rowers', []):
-                    athletes_in_event.append(rower)
-
-        # Filter available athletes
-        available_athletes = []
-        for name, rower in roster_manager.rowers.items():
-            # Must be signed up for regatta (and day if filtering by day)
-            if not is_attending_regatta(rower, regatta_for_filter, day_for_filter):
-                continue
-
-            # Must not already be in this event (use robust name matching)
-            if is_name_in_list(name, athletes_in_event):
-                continue
-
-
-            # Check gender eligibility (skip if cox toggle is on)
-            if event_gender and not include_all_genders:
-                if event_gender == 'Mixed':
-                    pass  # Anyone can row mixed
-                elif event_gender == 'M' and rower.gender != 'M':
-                    continue
-                elif event_gender == 'W' and rower.gender != 'F':
-                    continue
-
-            # Check category eligibility (can race "down" but not "up")
-            if event_category and rower.age:
-                category_min_ages = {'AA': 0, 'A': 27, 'B': 36, 'C': 43, 'D': 50, 'E': 55, 'F': 60, 'G': 65, 'H': 70, 'I': 75, 'J': 80}
-                event_min_age = category_min_ages.get(event_category, 0)
-                if rower.age < event_min_age:
-                    continue  # Too young for this category
-
-            # Calculate hot-seat impact if added to this event
-            hot_seat_color = "🟢"  # Default: good (no conflicts)
-            min_gap_minutes = None
-
-            if event_time:
-                # Find all events this athlete is already entered in
-                athlete_event_times = []
-                for entry in dashboard_entries:
-                    entry_rowers = entry.get('rowers', [])
-                    if is_name_in_list(name, entry_rowers):
-                        entry_event_num = entry.get('event_number')
-                        # Get the parsed time for this entry's event
-                        entry_event_info = events_dict.get(entry_event_num, {})
-                        entry_event_time = entry_event_info.get('parsed_time')
-                        if entry_event_time:
-                            athlete_event_times.append(entry_event_time)
-
-                if athlete_event_times:
-                    # Calculate minimum gap to the potential new event
-                    min_gap = float('inf')
-                    for existing_time in athlete_event_times:
-                        gap = abs((event_time - existing_time).total_seconds() / 60)
-                        if gap < min_gap:
-                            min_gap = gap
-
-                    min_gap_minutes = min_gap
-                    if min_gap < 30:
-                        hot_seat_color = "🔴"
-                    elif min_gap < 60:
-                        hot_seat_color = "🟠"
-                    elif min_gap < 90:
-                        hot_seat_color = "🟡"
-                    # else stays green (>= 90 min gap)
-
-            # Get erg score info
-            erg_info = ""
-            erg_time_seconds = None  # For sorting
-            if rower.scores:
-                # Try to get 1k score
-                score_1k = rower.scores.get(1000)
-                if score_1k:
-                    mins = int(score_1k.time_seconds // 60)
-                    secs = score_1k.time_seconds % 60
-                    erg_info = f"1k: {mins}:{secs:04.1f}"
-                    erg_time_seconds = score_1k.time_seconds
-                else:
-                    # Get any available score
-                    for dist, score in rower.scores.items():
-                        mins = int(score.time_seconds // 60)
-                        secs = score.time_seconds % 60
-                        erg_info = f"{dist}m: {mins}:{secs:04.1f}"
-                        erg_time_seconds = score.time_seconds
-                        break
-
-            # Count events this athlete is already entered in
-            events_count = sum(1 for e in dashboard_entries if is_name_in_list(name, e.get('rowers', [])))
-
-            available_athletes.append({
-                'name': name,
-                'rower': rower,
-                'hot_seat_color': hot_seat_color,
-                'min_gap': min_gap_minutes,
-                'erg_info': erg_info,
-                'erg_time_seconds': erg_time_seconds,
-                'age': rower.age,
-                'gender': rower.gender,
-                'events_entered': events_count
-            })
-
-        # Initialize secondary sort state if needed (primary is always gap)
-        # Format: 'name', 'age_desc', 'age_asc', 'erg_asc', 'erg_desc'
-        if 'available_athletes_secondary_sort' not in st.session_state:
-            st.session_state.available_athletes_secondary_sort = 'name'
-
-        # Sort: primary by gap (hot-seat color), secondary by user choice
-        color_order = {'🟢': 0, '🟡': 1, '🟠': 2, '🔴': 3}
-        sort_mode = st.session_state.available_athletes_secondary_sort
-
-        if sort_mode == 'age_desc':
-            # Age descending (older first), None values last
-            available_athletes.sort(key=lambda a: (
-                color_order.get(a['hot_seat_color'], 4),
-                a['age'] is None,
-                -(a['age'] or 0),
-                a['name']
-            ))
-        elif sort_mode == 'age_asc':
-            # Age ascending (younger first), None values last
-            available_athletes.sort(key=lambda a: (
-                color_order.get(a['hot_seat_color'], 4),
-                a['age'] is None,
-                a['age'] or 999,
-                a['name']
-            ))
-        elif sort_mode == 'erg_asc':
-            # Erg time ascending (faster first), None values last
-            available_athletes.sort(key=lambda a: (
-                color_order.get(a['hot_seat_color'], 4),
-                a['erg_time_seconds'] is None,
-                a['erg_time_seconds'] or float('inf'),
-                a['name']
-            ))
-        elif sort_mode == 'erg_desc':
-            # Erg time descending (slower first), None values last
-            available_athletes.sort(key=lambda a: (
-                color_order.get(a['hot_seat_color'], 4),
-                a['erg_time_seconds'] is None,
-                -(a['erg_time_seconds'] or 0),
-                a['name']
-            ))
-        else:
-            # Secondary: name (default)
-            available_athletes.sort(key=lambda a: (color_order.get(a['hot_seat_color'], 4), a['name']))
-
-        if not available_athletes:
-            st.info("No available athletes found for this event. Check eligibility requirements or regatta signups.")
-        else:
-            # Header row with sort buttons
-            header_cols = st.columns([0.5, 2, 1, 1, 1.5, 0.5])
-            with header_cols[0]:
-                st.caption("")  # Hot-seat color column - no label needed
-            with header_cols[1]:
-                st.caption("Athlete")
-            with header_cols[2]:
-                # Age sort button - toggle between desc/asc
-                if sort_mode == 'age_desc':
-                    age_label = "**Age ↓**"
-                elif sort_mode == 'age_asc':
-                    age_label = "**Age ↑**"
-                else:
-                    age_label = "Age"
-                if st.button(age_label, key="sort_age", use_container_width=True):
-                    if sort_mode == 'age_desc':
-                        st.session_state.available_athletes_secondary_sort = 'age_asc'
-                    else:
-                        st.session_state.available_athletes_secondary_sort = 'age_desc'
-                    st.rerun()
-            with header_cols[3]:
-                st.caption("Time Gap")
-            with header_cols[4]:
-                # Erg sort button - toggle between asc/desc
-                if sort_mode == 'erg_asc':
-                    erg_label = "**Erg ↑**"
-                elif sort_mode == 'erg_desc':
-                    erg_label = "**Erg ↓**"
-                else:
-                    erg_label = "Erg"
-                if st.button(erg_label, key="sort_erg", use_container_width=True):
-                    if sort_mode == 'erg_asc':
-                        st.session_state.available_athletes_secondary_sort = 'erg_desc'
-                    else:
-                        st.session_state.available_athletes_secondary_sort = 'erg_asc'
-                    st.rerun()
-            with header_cols[5]:
-                st.caption("")  # Checkbox column - no label needed
-
-            st.markdown("---")
-
-            # Initialize selection state
-            if 'selected_athletes' not in st.session_state:
-                st.session_state.selected_athletes = set()
-
-            # Get max seats for this boat class
-            boat_seats = {'1x': 1, '2x': 2, '2-': 2, '4x': 4, '4+': 4, '4-': 4, '8+': 8}
-            max_seats = boat_seats.get(event_boat, 8) if event_boat else 8
-
-            # Calculate selected athletes from checkbox widget states (these are updated BEFORE rerun)
-            # This ensures buttons reflect current selection even on the rerun triggered by checkbox click
-            # Limit selections to max seats for the boat class
-            selected_for_event = []
-            for athlete in available_athletes:
-                checkbox_key = f"select_{athlete['name']}_{event_num}"
-                # Check widget state directly - Streamlit updates this before rerun
-                if st.session_state.get(checkbox_key, False):
-                    if len(selected_for_event) < max_seats:
-                        selected_for_event.append(athlete['name'])
-                        st.session_state.selected_athletes.add(athlete['name'])
-                    else:
-                        # Uncheck - exceeded max seats
-                        st.session_state[checkbox_key] = False
-                        st.session_state.selected_athletes.discard(athlete['name'])
-                else:
-                    st.session_state.selected_athletes.discard(athlete['name'])
-
-            # Action bar - always visible, disabled when no selection
-            btn_col1, btn_col2, btn_col3, btn_col4 = st.columns(4)
-            has_selection = len(selected_for_event) > 0
-
-            def clear_all_selections():
-                """Clear both selected_athletes set and checkbox widget states"""
-                st.session_state.selected_athletes.clear()
-                for athlete in available_athletes:
-                    checkbox_key = f"select_{athlete['name']}_{event_num}"
-                    if checkbox_key in st.session_state:
-                        st.session_state[checkbox_key] = False
-
-            def add_to_lineup(lineup_key, lineup_name):
-                lineup = st.session_state[lineup_key]
-                added_count = 0
-                for name in selected_for_event:
-                    for i in range(len(lineup)):
-                        if lineup[i] is None:
-                            st.session_state[lineup_key][i] = name
-                            added_count += 1
-                            break
-                clear_all_selections()
-                if added_count > 0:
-                    st.toast(f"Added {added_count} athlete(s) to {lineup_name}")
-                if added_count < len(selected_for_event):
-                    st.toast(f":warning: {lineup_name} is full — only added {added_count} of {len(selected_for_event)}")
-                st.rerun()
-
-            is_editing = st.session_state.get('editing_entry') is not None
-            with btn_col1:
-                btn_a_label = "➕ Add to Entry" if is_editing else "➕ Lineup A"
-                if st.button(btn_a_label, key="add_sel_to_a", use_container_width=True, disabled=not has_selection, type="primary" if is_editing else "secondary"):
-                    add_to_lineup('lineup_a', 'Lineup A')
-            with btn_col2:
-                if st.button("➕ Lineup B", key="add_sel_to_b", use_container_width=True, disabled=not has_selection or is_editing):
-                    add_to_lineup('lineup_b', 'Lineup B')
-            with btn_col3:
-                if st.button("➕ Lineup C", key="add_sel_to_c", use_container_width=True, disabled=not has_selection or is_editing):
-                    add_to_lineup('lineup_c', 'Lineup C')
-            with btn_col4:
-                if st.button("✖ Clear", key="clear_sel", use_container_width=True, disabled=not has_selection):
-                    clear_all_selections()
-                    st.rerun()
-
-            selection_info = f" ({len(selected_for_event)}/{max_seats} selected)" if selected_for_event else ""
-            st.success(f"**{len(available_athletes)} available athletes**{selection_info}")
-
-            # Display as a compact table with checkboxes
-            for athlete in available_athletes:
-                col1, col2, col3, col4, col5, col6 = st.columns([0.5, 2, 1, 1, 1.5, 0.5])
-                with col1:
-                    st.markdown(athlete['hot_seat_color'])
-                with col2:
-                    events_badge = f" ({athlete['events_entered']})" if athlete['events_entered'] > 0 else ""
-                    st.markdown(f"**{athlete['name']}**{events_badge}")
-                with col3:
-                    gender_display = "♀" if athlete['gender'] == 'F' else "♂"
-                    st.caption(f"{gender_display} {athlete['age'] or '-'}y")
-                with col4:
-                    if athlete['min_gap'] is not None:
-                        st.caption(f"{int(athlete['min_gap'])}min gap")
-                    else:
-                        st.caption("No events")
-                with col5:
-                    st.caption(athlete['erg_info'] or "No erg")
-                with col6:
-                    # Disable checkbox if max seats reached and this athlete not already selected
-                    is_selected = athlete['name'] in selected_for_event
-                    at_max = len(selected_for_event) >= max_seats
-                    st.checkbox("", key=f"select_{athlete['name']}_{event_num}",
-                               disabled=(at_max and not is_selected),
-                               label_visibility="collapsed")
+        render_find_available_athletes(
+            event_num=event_num,
+            event_name=event_name,
+            event_time=event_time,
+            roster_manager=roster_manager,
+            selected_regatta=selected_regatta,
+            dashboard_entries=dashboard_entries,
+            events_dict=events_dict,
+            edit_mode=False,
+            key_suffix=''
+        )
 
 
 def main():
@@ -8232,6 +8216,75 @@ Clear buttons at the top of each column reset that lineup.
                         elif entered_event_numbers:
                             # All eligible events already have this lineup entered
                             st.button("✓ Lineup Entered", key=f"entered_{key}", use_container_width=True, disabled=True)
+
+    # =========================================================================
+    # FIND AVAILABLE ATHLETES (Edit Mode Only)
+    # =========================================================================
+    editing_entry_for_athletes = st.session_state.get('editing_entry')
+    editing_event_for_athletes = st.session_state.get('editing_event')
+    if editing_entry_for_athletes and editing_event_for_athletes and has_events:
+        import re as _re
+        from datetime import datetime as _dt
+
+        st.divider()
+        st.subheader(f"Find Available Athletes for {editing_event_for_athletes.event_name}")
+
+        # Build dashboard_entries for the current regatta/day
+        _regatta_name = selected_regatta.split("|")[0] if "|" in selected_regatta else selected_regatta
+        _regatta_lower = _regatta_name.lower()
+        _day_filter = None
+        if "|" in selected_regatta:
+            _day_filter = selected_regatta.split("|", 1)[1].split(",")[0].split()[0].strip().lower()
+
+        edit_dashboard_entries = []
+        for entry in st.session_state.event_entries:
+            entry_regatta = entry.get('regatta', '').lower()
+            if (entry_regatta == _regatta_lower or entry_regatta in _regatta_lower or _regatta_lower in entry_regatta):
+                if _day_filter:
+                    entry_day = entry.get('day', '')
+                    entry_day_name = entry_day.split(",")[0].split()[0].strip().lower() if entry_day else ''
+                    if entry_day_name != _day_filter:
+                        continue
+                edit_dashboard_entries.append(entry)
+
+        # Build events_dict with parsed times
+        def _parse_time_for_sort(time_str: str):
+            if not time_str:
+                return None
+            time_str = time_str.strip().upper()
+            if time_str.count(':') >= 2:
+                time_str = _re.sub(r':\d{2}(?=\s|$)', '', time_str)
+            for fmt in ['%I:%M %p', '%H:%M', '%I:%M%p', '%I:%M  %p']:
+                try:
+                    return _dt.strptime(time_str.replace('  ', ' '), fmt)
+                except Exception:
+                    continue
+            return None
+
+        events = roster_manager.regatta_events.get(selected_regatta, [])
+        edit_events_dict = {}
+        for evt in events:
+            edit_events_dict[evt.event_number] = {
+                'number': evt.event_number,
+                'name': evt.event_name,
+                'time': evt.event_time,
+                'parsed_time': _parse_time_for_sort(evt.event_time)
+            }
+
+        # Parse the editing event's time
+        _editing_event_time = _parse_time_for_sort(editing_event_for_athletes.event_time)
+
+        render_find_available_athletes(
+            event_num=editing_event_for_athletes.event_number,
+            event_name=editing_event_for_athletes.event_name,
+            event_time=_editing_event_time,
+            roster_manager=roster_manager,
+            selected_regatta=selected_regatta,
+            dashboard_entries=edit_dashboard_entries,
+            events_dict=edit_events_dict,
+            edit_mode=True,
+            key_suffix='_edit'
+        )
 
     # Inline Analysis Results - auto-analyze full lineups and display below each column
     # CSS for fade-in animation
