@@ -3385,12 +3385,14 @@ def shorten_names(names: List[str]) -> List[str]:
     return short_names
 
 
-def format_lineup_string(rowers: List[str], boat_class: str) -> str:
+def format_lineup_string(rowers: List[str], boat_class: str, cox_name: Optional[str] = None) -> str:
     """Format rowers list as lineup string: (Cox)-8-7-6-5-4-3-2-1 (stern to bow)
 
     For boats without cox (4-, 2-, 1x), omit the cox position.
     Rowers list is assumed to be in seat order (stroke to bow, cox last if present).
     Cox is wrapped in parentheses. Uses full names for data integrity.
+
+    If cox_name is provided, it is used directly instead of inferring from list length.
     """
     # Clean up any "(needs cox)" fragments stuck to rower names
     cleaned_rowers = []
@@ -3412,11 +3414,14 @@ def format_lineup_string(rowers: List[str], boat_class: str) -> str:
     expected_seats = boat_seats.get(boat_class, 4)
 
     if has_cox:
-        # Check if cox is included (list has seats + 1 for cox)
-        if len(rowers) > expected_seats:
-            # Cox is included as last element
-            cox_name = rowers[-1]
-            cox = f"({cox_name})" if cox_name else "(needs cox)"
+        if cox_name:
+            # Cox explicitly provided — remove from rowers list if present, format directly
+            cox = f"({cox_name})"
+            seats = [r for r in rowers if r != cox_name][:expected_seats]
+        elif len(rowers) > expected_seats:
+            # Legacy: cox is last element
+            cox_name_legacy = rowers[-1]
+            cox = f"({cox_name_legacy})" if cox_name_legacy else "(needs cox)"
             seats = rowers[:expected_seats]
         else:
             # No cox included - just seats
@@ -3542,6 +3547,7 @@ def load_entries_from_gsheet() -> List[dict]:
                 'category': record.get('Category', ''),
                 'avg_age': float(record.get('Avg Age', 0)) if record.get('Avg Age') else 0,
                 'rowers': parse_lineup_string(record.get('Lineup', ''), record.get('Boat Class', '')),
+                'lineup_str': record.get('Lineup', ''),  # Raw string for cox detection during edit
                 'boat': record.get('Boat', ''),  # Club boat assignment
                 'timestamp': record.get('Timestamp', ''),
                 'row_number': records.index(record) + 2  # +2 for header row and 0-indexing
@@ -3560,7 +3566,7 @@ def save_entry_to_gsheet(entry: dict) -> bool:
         return False
 
     try:
-        lineup_str = format_lineup_string(entry['rowers'], entry['boat_class'])
+        lineup_str = format_lineup_string(entry['rowers'], entry['boat_class'], cox_name=entry.get('cox'))
         # Normalize day and time formats for consistency
         normalized_day = normalize_day_format(entry['day'])
         normalized_time = normalize_time_format(entry['event_time'])
@@ -3624,7 +3630,8 @@ def update_entry_in_gsheet(original_entry: dict, updated_entry: dict) -> bool:
                 int(record.get('Entry Number', 0)) == original_entry['entry_number']):
                 # Found it - update the row
                 row_num = idx + 2  # +2 for header and 0-indexing
-                lineup_str = format_lineup_string(updated_entry['rowers'], updated_entry['boat_class'])
+                lineup_str = format_lineup_string(updated_entry['rowers'], updated_entry['boat_class'],
+                                                   cox_name=updated_entry.get('cox'))
                 # Normalize day and time formats for consistency
                 normalized_day = normalize_day_format(updated_entry['day'])
                 normalized_time = normalize_time_format(updated_entry['event_time'])
@@ -5815,17 +5822,19 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                 if added_count > 0:
                     st.toast(f"Added {added_count} athlete(s) to {lineup_name}")
                 if added_count < len(selected_for_event):
-                    st.warning(f"{lineup_name} is full! Only added {added_count} of {len(selected_for_event)}")
+                    st.toast(f":warning: {lineup_name} is full — only added {added_count} of {len(selected_for_event)}")
                 st.rerun()
 
+            is_editing = st.session_state.get('editing_entry') is not None
             with btn_col1:
-                if st.button("➕ Lineup A", key="add_sel_to_a", use_container_width=True, disabled=not has_selection):
+                btn_a_label = "➕ Add to Entry" if is_editing else "➕ Lineup A"
+                if st.button(btn_a_label, key="add_sel_to_a", use_container_width=True, disabled=not has_selection, type="primary" if is_editing else "secondary"):
                     add_to_lineup('lineup_a', 'Lineup A')
             with btn_col2:
-                if st.button("➕ Lineup B", key="add_sel_to_b", use_container_width=True, disabled=not has_selection):
+                if st.button("➕ Lineup B", key="add_sel_to_b", use_container_width=True, disabled=not has_selection or is_editing):
                     add_to_lineup('lineup_b', 'Lineup B')
             with btn_col3:
-                if st.button("➕ Lineup C", key="add_sel_to_c", use_container_width=True, disabled=not has_selection):
+                if st.button("➕ Lineup C", key="add_sel_to_c", use_container_width=True, disabled=not has_selection or is_editing):
                     add_to_lineup('lineup_c', 'Lineup C')
             with btn_col4:
                 if st.button("✖ Clear", key="clear_sel", use_container_width=True, disabled=not has_selection):
@@ -6623,19 +6632,36 @@ Clear buttons at the top of each column reset that lineup.
                             if st.button("✏️ Edit", key=f"edit_{event.event_number}_{ev_idx}_{idx}", use_container_width=True):
                                 entry_boat = entry.get('boat_class', '4+')
                                 entry_rowers = entry.get('rowers', [])
+                                raw_lineup = entry.get('lineup_str', '')
                                 is_coxed_btn = '+' in entry_boat
                                 st.session_state.pending_boat_class = entry_boat
                                 boat_seats_btn = {'1x': 1, '2x': 2, '2-': 2, '4x': 4, '4+': 4, '4-': 4, '8+': 8}
                                 expected_seats_btn = boat_seats_btn.get(entry_boat, 4)
+
+                                # Extract cox from parenthesized format in raw lineup string
+                                cox_from_entry = None
+                                if is_coxed_btn and raw_lineup.strip().startswith('('):
+                                    first_part = raw_lineup.split('-', 1)[0].strip()
+                                    if first_part.startswith('(') and first_part.endswith(')'):
+                                        candidate = first_part[1:-1].strip()
+                                        if candidate.lower() != 'needs cox':
+                                            cox_from_entry = candidate
+
                                 if is_coxed_btn and entry_rowers:
-                                    if len(entry_rowers) > expected_seats_btn:
+                                    if cox_from_entry:
+                                        # Remove cox from rowers list (appended at end by parse_lineup_string)
+                                        rowers_only = [r for r in entry_rowers if r != cox_from_entry]
+                                        st.session_state.lineup_a = rowers_only + [None] * (expected_seats_btn - len(rowers_only))
+                                        st.session_state.cox_a = cox_from_entry
+                                    elif len(entry_rowers) > expected_seats_btn:
+                                        # Fallback: old logic for backward compatibility
                                         st.session_state.lineup_a = entry_rowers[:expected_seats_btn]
                                         st.session_state.cox_a = entry_rowers[expected_seats_btn]
                                     else:
                                         st.session_state.lineup_a = entry_rowers + [None] * (expected_seats_btn - len(entry_rowers))
                                         st.session_state.cox_a = None
                                 else:
-                                    st.session_state.lineup_a = entry_rowers + [None] * (expected_seats_btn - len(entry_rowers))
+                                    st.session_state.lineup_a = entry_rowers + [None] * max(0, expected_seats_btn - len(entry_rowers))
                                     st.session_state.cox_a = None
                                 st.session_state.pending_boat_a = entry.get('boat', None)
                                 st.session_state.editing_entry = entry.copy()
@@ -7729,6 +7755,7 @@ Clear buttons at the top of each column reset that lineup.
                         'category': f"{lineup_gender} {get_masters_category(avg_age) if avg_age >= 21 else 'AA'}",
                         'avg_age': round(avg_age, 1),
                         'rowers': rower_names,
+                        'cox': cox_name,
                         'boat': st.session_state.get('boat_a', ''),  # Club boat assignment
                         'timestamp': datetime.now().isoformat()
                     }
@@ -7903,9 +7930,16 @@ Clear buttons at the top of each column reset that lineup.
                     if st.button(cox_label, key=f"cox_{key}", use_container_width=True):
                         if st.session_state.selected_rower:
                             selected = st.session_state.selected_rower
-                            # Cox can be same person in multiple lineups, just check not already a rower in this lineup
                             if selected in lineup:
-                                st.warning(f"{selected} is already rowing in {title}!")
+                                # Swap: rower goes to cox, current cox goes to rower's old seat
+                                old_pos = lineup.index(selected)
+                                if old_pos in locked_seats and show_lock_controls:
+                                    st.warning(f"Cannot move {selected} — their seat is locked.")
+                                else:
+                                    st.session_state[key][old_pos] = cox_name  # Put current cox in the rowing seat
+                                    st.session_state[cox_key] = selected
+                                    st.session_state.selected_rower = None
+                                    st.rerun()
                             else:
                                 st.session_state[cox_key] = selected
                                 st.session_state.selected_rower = None
@@ -7957,7 +7991,14 @@ Clear buttons at the top of each column reset that lineup.
                             st.warning(f"Seat {label} is locked. Unlock it first to modify.")
                         elif st.session_state.selected_rower:
                             selected = st.session_state.selected_rower
-                            if selected in lineup:
+                            cox_name_current = st.session_state.get(cox_key)
+                            if is_coxed_boat and selected == cox_name_current:
+                                # Selected rower is currently cox — swap with this seat's rower
+                                st.session_state[cox_key] = rower_name  # Current seat rower becomes cox (or None)
+                                st.session_state[key][i] = selected
+                                st.session_state.selected_rower = None
+                                st.rerun()
+                            elif selected in lineup:
                                 # Rower is already in this lineup - move or swap
                                 old_pos = lineup.index(selected)
                                 # Check if old position is locked (only if controls visible)
@@ -8180,6 +8221,7 @@ Clear buttons at the top of each column reset that lineup.
                                             'category': f"{lineup_gender} {category}",
                                             'avg_age': round(avg_age, 1),
                                             'rowers': rower_names_list.copy(),
+                                            'cox': cox_name_for_entry,
                                             'boat': st.session_state.get(boat_key, ''),
                                             'timestamp': datetime.now().isoformat()
                                         }
