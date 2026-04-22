@@ -602,6 +602,7 @@ def parse_event_category(event_name: str) -> Optional[str]:
 
     Handles multiple formats:
     - Letter categories: 'Masters A', 'Masters B/C' -> 'A', 'B'
+    - Dash ranges: 'Womens 4+ C-E', 'Masters AA-B' -> 'C', 'AA'
     - Age categories: 'Masters 30+', '40+' -> '30+', '40+'
     - Standalone letters: "Women's F 8+" -> 'F'
     """
@@ -610,21 +611,21 @@ def parse_event_category(event_name: str) -> Optional[str]:
     if age_match:
         return f"{age_match.group(1)}+"
 
-    # Then try letter format: "Masters X", "Masters X/Y", "Masters F+" patterns
-    letter_match = re.search(r'Masters\s+([A-J]{1,2}(?:/[A-J])?)\+?', event_name, re.IGNORECASE)
+    # Then try letter format: "Masters X", "Masters X/Y", "Masters X-Y" patterns
+    letter_match = re.search(r'Masters\s+([A-J]{1,2}(?:[/-][A-J]{1,2})?)\+?', event_name, re.IGNORECASE)
     if letter_match:
-        # Return first category letter (e.g., "B" from "B/C")
+        # Return first category (e.g., "B" from "B/C" or "C" from "C-E")
         cat = letter_match.group(1).upper()
-        return cat.split('/')[0] if '/' in cat else cat
+        return re.split(r'[/-]', cat)[0]
 
     # Fallback: standalone category letter(s) with optional "+" suffix
-    # Matches "Womens F+ 8+", "Men's D/E 4+", "Mixed AA 8+" etc.
+    # Matches "Womens F+ 8+", "Men's D/E 4+", "Mixed AA 8+", "Womens C-E 4+" etc.
     # Won't match boat class "8+" because [A-J] only matches letters
     # Won't match gender in "Womens" because (?=\s|$) requires space/end after
-    standalone = re.search(r'\b([A-J]{1,2}(?:/[A-J])?)\+?(?=\s|$)', event_name)
+    standalone = re.search(r'\b([A-J]{1,2}(?:[/-][A-J]{1,2})?)\+?(?=\s|$)', event_name)
     if standalone:
         cat = standalone.group(1).upper()
-        return cat.split('/')[0] if '/' in cat else cat
+        return re.split(r'[/-]', cat)[0]
 
     # Check for "Open" events (no age restriction)
     if 'open' in event_name.lower():
