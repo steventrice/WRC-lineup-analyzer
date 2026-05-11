@@ -4005,8 +4005,9 @@ def get_seat_labels(num_seats: int) -> List[str]:
 
 def generate_day_overview_excel(sorted_events, events_dict, all_athletes, athlete_events,
                                 athlete_colors, all_boats_used, boat_events, boat_colors,
-                                dashboard_entries, format_event_time_func, regatta_name):
-    """Generate an Excel workbook with Day Overview grid and Issues Summary.
+                                dashboard_entries, format_event_time_func, regatta_name,
+                                roster_manager=None):
+    """Generate an Excel workbook with Day Overview grid, Issues Summary, and Race Count.
 
     Returns bytes suitable for st.download_button.
     """
@@ -4338,6 +4339,86 @@ def generate_day_overview_excel(sorted_events, events_dict, all_athletes, athlet
     # Auto-size columns on Issues sheet
     for col_idx in range(1, 8):
         ws2.column_dimensions[get_column_letter(col_idx)].width = 22
+
+    # ===========================
+    # Sheet 3: Race Count
+    # ===========================
+    ws3 = wb.create_sheet(title="Race Count")
+
+    # Build race count data per athlete
+    race_count_data = []
+    for athlete in all_athletes:
+        events_map = athlete_events.get(athlete, {})
+        total_races = 0
+        cox_races = 0
+        for event_num, entries in events_map.items():
+            total_races += 1
+            # Check if this athlete is coxing in this event
+            if any(e.get('seat') == 'Cox' for e in entries):
+                cox_races += 1
+        if total_races == 0:
+            continue
+
+        # Get age from roster_manager if available
+        age = None
+        if roster_manager:
+            rower_obj = roster_manager.get_rower(athlete)
+            if rower_obj:
+                age = rower_obj.age
+
+        race_count_data.append({
+            'name': athlete,
+            'age': age,
+            'total': total_races,
+            'cox': cox_races,
+            'rowing': total_races - cox_races,
+        })
+
+    # Sort by age (ascending), then name
+    race_count_data.sort(key=lambda r: (r['age'] if r['age'] is not None else 999, r['name']))
+
+    # Header row
+    rc_headers = ["Athlete", "Age", "Races", "Rowing", "Cox"]
+    for col_idx, hdr in enumerate(rc_headers, start=1):
+        cell = ws3.cell(row=1, column=col_idx, value=hdr)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.border = thin_border
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    # Data rows
+    for row_idx, data in enumerate(race_count_data, start=2):
+        ws3.cell(row=row_idx, column=1, value=data['name']).border = thin_border
+        ws3.cell(row=row_idx, column=1).alignment = left_align
+
+        age_cell = ws3.cell(row=row_idx, column=2, value=data['age'])
+        age_cell.border = thin_border
+        age_cell.alignment = Alignment(horizontal='center')
+
+        total_cell = ws3.cell(row=row_idx, column=3, value=data['total'])
+        total_cell.border = thin_border
+        total_cell.alignment = Alignment(horizontal='center')
+
+        rowing_cell = ws3.cell(row=row_idx, column=4, value=data['rowing'])
+        rowing_cell.border = thin_border
+        rowing_cell.alignment = Alignment(horizontal='center')
+
+        cox_cell = ws3.cell(row=row_idx, column=5, value=data['cox'])
+        cox_cell.border = thin_border
+        cox_cell.alignment = Alignment(horizontal='center')
+        # Only show cox count if non-zero
+        if data['cox'] == 0:
+            cox_cell.value = None
+
+    # Column widths
+    ws3.column_dimensions['A'].width = 24
+    ws3.column_dimensions['B'].width = 8
+    ws3.column_dimensions['C'].width = 10
+    ws3.column_dimensions['D'].width = 10
+    ws3.column_dimensions['E'].width = 8
+
+    # Freeze header row
+    ws3.freeze_panes = 'A2'
 
     # Write to bytes
     buf = BytesIO()
@@ -5288,7 +5369,8 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
             excel_bytes = generate_day_overview_excel(
                 sorted_events, events_dict, all_athletes, athlete_events,
                 athlete_colors, all_boats_used, boat_events, boat_colors,
-                dashboard_entries, format_event_time_func, regatta_name
+                dashboard_entries, format_event_time_func, regatta_name,
+                roster_manager=roster_manager
             )
             st.download_button(
                 label="📥 Hot Seats",
