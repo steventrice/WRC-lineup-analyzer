@@ -7906,6 +7906,14 @@ Clear buttons at the top of each column reset that lineup.
                         st.session_state[clear_flag] = True
                         st.rerun()
 
+            # Get the locked seats set for this lineup
+            lineup_letter = key.split('_')[1]  # 'a', 'b', or 'c'
+            locked_seats_key = f"locked_seats_{lineup_letter}"
+            locked_seats = st.session_state.get(locked_seats_key, set())
+
+            # Check if autofill controls should be shown
+            show_lock_controls = st.session_state.get('show_autofill_controls', False)
+
             # Cox slot for coxed boats (4+, 8+)
             is_coxed_boat = '+' in boat_class
             cox_key = f"cox_{key.split('_')[1]}"  # cox_a, cox_b, cox_c
@@ -7941,14 +7949,6 @@ Clear buttons at the top of each column reset that lineup.
                         if st.button("❌", key=f"remove_cox_{key}"):
                             st.session_state[cox_key] = None
                             st.rerun()
-
-            # Get the locked seats set for this lineup
-            lineup_letter = key.split('_')[1]  # 'a', 'b', or 'c'
-            locked_seats_key = f"locked_seats_{lineup_letter}"
-            locked_seats = st.session_state.get(locked_seats_key, set())
-
-            # Check if autofill controls should be shown
-            show_lock_controls = st.session_state.get('show_autofill_controls', False)
 
             for i, label in enumerate(seat_labels):
                 rower_name = lineup[i] if i < len(lineup) else None
