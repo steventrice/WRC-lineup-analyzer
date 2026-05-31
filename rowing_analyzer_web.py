@@ -1277,6 +1277,21 @@ class RosterManager:
                 day_match = day_pattern.match(str(col))
                 day_name = day_match.group(1).capitalize() if day_match else None
                 all_cols_for_regatta.append((col, day_name))
+
+            # Filter out likely "notes/comments" columns that share the same base name
+            # If multiple columns have no day prefix, only keep the one(s) with yes/no signup values
+            # Adjacent notes columns (e.g. "Head of the Charles.1") contain free-text comments
+            has_any_day_cols = any(d for _, d in all_cols_for_regatta)
+            if not has_any_day_cols and len(all_cols_for_regatta) > 1:
+                # Multiple columns, no day prefixes - likely signup + notes columns
+                # Keep only columns that have "yes" values (actual signup columns)
+                signup_cols = [(col, day) for (col, day), (_, _, has_yes) in zip(all_cols_for_regatta, candidates) if has_yes]
+                if signup_cols:
+                    all_cols_for_regatta = signup_cols
+                else:
+                    # No column has "yes" - just use the first/primary one
+                    all_cols_for_regatta = [all_cols_for_regatta[0]]
+
             regatta_all_cols[base_name] = all_cols_for_regatta
 
             # Sort by: has_yes (True first), then priority (lower is better)
@@ -1326,7 +1341,18 @@ class RosterManager:
                     if isinstance(val, pd.Series):
                         val = val.iloc[0]
                     val_str = str(val).strip().lower() if pd.notna(val) else ''
-                    is_attending_day = bool(val_str) and val_str not in ['no', 'n', 'false', '0', '', 'nan']
+                    # Treat as NOT attending if empty or starts with/is a negative indicator
+                    # This handles cases like "No - on vacation", "no thanks", "n/a", etc.
+                    negative_values = ['no', 'n', 'false', '0', '', 'nan', 'n/a', 'na']
+                    is_negative = (not val_str or
+                                   val_str in negative_values or
+                                   val_str.startswith('no ') or
+                                   val_str.startswith('no-') or
+                                   val_str.startswith('no,') or
+                                   val_str.startswith('n/a'))
+                    # Only treat as attending if value looks affirmative (yes, y, etc.)
+                    # or is non-empty and not a negative indicator
+                    is_attending_day = bool(val_str) and not is_negative
 
                     # Store day-specific signup if this column has a day
                     # Use display_name (clean base name) for the key, not column name
