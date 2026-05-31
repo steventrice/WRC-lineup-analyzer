@@ -589,11 +589,33 @@ def parse_event_gender(event_name: str) -> Optional[str]:
 
 def parse_event_boat_class(event_name: str) -> Optional[str]:
     """Extract boat class from event name."""
-    # Look for standard boat classes
+    # Look for standard boat classes (abbreviations)
     boat_patterns = ['8+', '4+', '4-', '4x', '2+', '2-', '2x', '1x']
     for boat in boat_patterns:
         if boat in event_name:
             return boat
+
+    # Look for spelled-out boat class names (e.g., Head of the Charles)
+    # Handles both singular and plural forms (double/doubles, eight/eights, etc.)
+    name_lower = event_name.lower()
+    spelled_out = {
+        'eights?': '8+',
+        'coxed fours?': '4+',
+        'straight fours?': '4-',
+        'coxless fours?': '4-',
+        'fours?': '4+',
+        'quads?': '4x',
+        'coxed pairs?': '2+',
+        'straight pairs?': '2-',
+        'coxless pairs?': '2-',
+        'pairs?': '2-',
+        'doubles?': '2x',
+        'singles?': '1x',
+    }
+    for pattern, boat_class in spelled_out.items():
+        if re.search(r'\b' + pattern + r'\b', name_lower):
+            return boat_class
+
     return None
 
 
