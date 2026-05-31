@@ -2511,7 +2511,7 @@ class LineupOptimizer:
             regatta_lower = regatta_for_filter.lower()
             rower_names = []
             for name, rower in self.roster.rowers.items():
-                # If day is specified, check day-specific signup
+                # If day is specified, check day-specific signup first, then fall back to base regatta
                 if day_for_filter:
                     found = False
                     for signup_key, attending in rower.regatta_signups.items():
@@ -2521,6 +2521,19 @@ class LineupOptimizer:
                                 (regatta_lower in signup_regatta.lower() or signup_regatta.lower() in regatta_lower)):
                                 found = True
                                 break
+                    # Fall back to base regatta name if no day-specific signup found
+                    # (signup sheet may not have day-specific columns for this regatta)
+                    if not found:
+                        if rower.is_attending(regatta_for_filter):
+                            found = True
+                        else:
+                            for signup_regatta, attending in rower.regatta_signups.items():
+                                if "|" in signup_regatta:
+                                    continue
+                                if attending and (regatta_lower in signup_regatta.lower() or
+                                                 signup_regatta.lower() in regatta_lower):
+                                    found = True
+                                    break
                     if found:
                         rower_names.append(name)
                 else:
@@ -4809,6 +4822,7 @@ def render_find_available_athletes(
 
     def is_attending_regatta(rower, regatta_check, day_name=None):
         if day_name:
+            # Check day-specific signup keys first
             for signup_key, attending in rower.regatta_signups.items():
                 if attending and "|" in signup_key:
                     signup_regatta, signup_day = signup_key.rsplit("|", 1)
@@ -4816,7 +4830,8 @@ def render_find_available_athletes(
                     if (signup_day.lower() == day_name.lower() and
                         (regatta_lower in signup_regatta.lower() or signup_regatta.lower() in regatta_lower)):
                         return True
-            return False
+            # Fall back to base regatta name if no day-specific signup found
+            # (signup sheet may not have day-specific columns for this regatta)
         if rower.is_attending(regatta_check):
             return True
         regatta_lower = regatta_check.lower()
