@@ -2078,16 +2078,16 @@ class RosterManager:
         # Some regattas use: 30+, 40+, 50+, 60+, 70+, 80+
         category_mappings = {
             'aa': ['aa', 'open', 'club', '21+'],
-            'a': ['a', 'masters a', 'master (27-35)', 'open', 'club', '27+', '30+'],
-            'b': ['b', 'masters b', 'master (36-42)', 'veteran (40-49)', '36+', '30+', '40+'],
-            'c': ['c', 'masters c', 'master (43-49)', 'veteran (40-49)', 'senior master (40-49)', '43+', '40+'],
+            'a': ['a', 'masters a', 'master (27-35)', 'open', 'club', '27+', '30+', 'master (40-49)'],
+            'b': ['b', 'masters b', 'master (36-42)', 'veteran (40-49)', '36+', '30+', '40+', 'master (40-49)'],
+            'c': ['c', 'masters c', 'master (43-49)', 'veteran (40-49)', 'senior master (40-49)', '43+', '40+', 'master (40-49)'],
             'd': ['d', 'masters d', 'master (50-54)', 'grand master (50-59)', 'senior master (50-59)', '50+'],
             'e': ['e', 'masters e', 'master (55-59)', 'grand master (50-59)', 'senior master (50-59)', '50+', '55+'],
-            'f': ['f', 'masters f', 'master (60-64)', 'veteran (60+)', 'great grand master (60-69)', '60+', '50+'],
-            'g': ['g', 'masters g', 'master (65-69)', 'veteran (60+)', 'great grand master (60-69)', '60+', '65+', '50+'],
-            'h': ['h', 'masters h', 'master (70-74)', 'veteran (70-79)', '70+', '60+', '50+'],
-            'i': ['i', 'masters i', 'master (75-79)', 'veteran (70-79)', '70+', '75+', '60+', '50+'],
-            'j': ['j', 'masters j', 'master (80+)', 'grand veteran (80+)', 'grand veteran i (80-84)', 'grand veteran ii (85+)', '80+', '70+', '60+', '50+'],
+            'f': ['f', 'masters f', 'master (60-64)', 'veteran (60+)', 'great grand master (60-69)', '60+', '50+', 'veteran i (60-64)'],
+            'g': ['g', 'masters g', 'master (65-69)', 'veteran (60+)', 'great grand master (60-69)', '60+', '65+', '50+', 'veteran ii (65-69)'],
+            'h': ['h', 'masters h', 'master (70-74)', 'veteran (70-79)', '70+', '60+', '50+', 'senior veteran (70+)', 'senior veteran i (70-74)'],
+            'i': ['i', 'masters i', 'master (75-79)', 'veteran (70-79)', '70+', '75+', '60+', '50+', 'senior veteran (70+)', 'senior veteran ii (75-79)'],
+            'j': ['j', 'masters j', 'master (80+)', 'grand veteran (80+)', 'grand veteran i (80-84)', 'grand veteran ii (85+)', '80+', '70+', '60+', '50+', 'grand veteran iii (90+)', 'veteran legacy'],
         }
 
         # Get possible category names to search for
@@ -2162,16 +2162,16 @@ class RosterManager:
         # HOCR uses: master, senior master, grand master, veteran, etc.
         category_mappings = {
             'aa': ['aa', 'open', 'club', '21+'],
-            'a': ['a', 'masters a', 'master (27-35)', 'open', 'club', '27+', '30+'],
-            'b': ['b', 'masters b', 'master (36-42)', 'veteran (40-49)', '36+', '30+', '40+'],
-            'c': ['c', 'masters c', 'master (43-49)', 'veteran (40-49)', 'senior master (40-49)', '43+', '40+'],
+            'a': ['a', 'masters a', 'master (27-35)', 'open', 'club', '27+', '30+', 'master (40-49)'],
+            'b': ['b', 'masters b', 'master (36-42)', 'veteran (40-49)', '36+', '30+', '40+', 'master (40-49)'],
+            'c': ['c', 'masters c', 'master (43-49)', 'veteran (40-49)', 'senior master (40-49)', '43+', '40+', 'master (40-49)'],
             'd': ['d', 'masters d', 'master (50-54)', 'grand master (50-59)', 'senior master (50-59)', '50+'],
             'e': ['e', 'masters e', 'master (55-59)', 'grand master (50-59)', 'senior master (50-59)', '50+', '55+'],
-            'f': ['f', 'masters f', 'master (60-64)', 'veteran (60+)', 'great grand master (60-69)', '60+', '50+'],
-            'g': ['g', 'masters g', 'master (65-69)', 'veteran (60+)', 'great grand master (60-69)', '60+', '65+', '50+'],
-            'h': ['h', 'masters h', 'master (70-74)', 'veteran (70-79)', '70+', '60+', '50+'],
-            'i': ['i', 'masters i', 'master (75-79)', 'veteran (70-79)', '70+', '75+', '60+', '50+'],
-            'j': ['j', 'masters j', 'master (80+)', 'grand veteran (80+)', 'grand veteran i (80-84)', 'grand veteran ii (85+)', '80+', '70+', '60+', '50+'],
+            'f': ['f', 'masters f', 'master (60-64)', 'veteran (60+)', 'great grand master (60-69)', '60+', '50+', 'veteran i (60-64)'],
+            'g': ['g', 'masters g', 'master (65-69)', 'veteran (60+)', 'great grand master (60-69)', '60+', '65+', '50+', 'veteran ii (65-69)'],
+            'h': ['h', 'masters h', 'master (70-74)', 'veteran (70-79)', '70+', '60+', '50+', 'senior veteran (70+)', 'senior veteran i (70-74)'],
+            'i': ['i', 'masters i', 'master (75-79)', 'veteran (70-79)', '70+', '75+', '60+', '50+', 'senior veteran (70+)', 'senior veteran ii (75-79)'],
+            'j': ['j', 'masters j', 'master (80+)', 'grand veteran (80+)', 'grand veteran i (80-84)', 'grand veteran ii (85+)', '80+', '70+', '60+', '50+', 'grand veteran iii (90+)', 'veteran legacy'],
         }
         possible_categories = category_mappings.get(category_lower, [category_lower])
 
