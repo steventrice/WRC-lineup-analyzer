@@ -2476,7 +2476,7 @@ class LineupOptimizer:
 
     # Maximum combinations before switching from exhaustive to heuristic search
     # C(20,8) = 125,970 combinations takes ~1-2 seconds, which is acceptable
-    MAX_EXHAUSTIVE_COMBINATIONS = 150000
+    MAX_EXHAUSTIVE_COMBINATIONS = 500000
 
     def __init__(self, roster: RosterManager, analyzer: BoatAnalyzer):
         self.roster = roster
@@ -2792,7 +2792,7 @@ class LineupOptimizer:
         Returns:
             List of dicts with 'rowers', 'raw_time', 'adjusted_time', 'avg_age'
         """
-        from itertools import combinations
+        from itertools import combinations, product
         import math as math_module
 
         # Handle locked rowers: exclude them from available pool, adjust seats needed
@@ -2852,10 +2852,29 @@ class LineupOptimizer:
         if len(eligible) < unlocked_seats:
             return []
 
-        # Calculate number of combinations (only for unlocked seats)
-        n = len(eligible)
-        k = unlocked_seats
-        num_combinations = math_module.comb(n, k)
+        # Debug counters
+        debug_counts = {'age_rejected': 0, 'gender_rejected': 0, 'seat_rejected': 0, 'total_tried': 0}
+
+        # Calculate gender needs for Mixed lineups with locked rowers
+        locked_men = sum(1 for name in locked_names if self.roster.get_rower(name) and self.roster.get_rower(name).gender == 'M')
+        locked_women = sum(1 for name in locked_names if self.roster.get_rower(name) and self.roster.get_rower(name).gender == 'F')
+        need_men = (num_seats // 2) - locked_men if gender == "Mixed" else None
+        need_women = (num_seats // 2) - locked_women if gender == "Mixed" else None
+
+        # Calculate number of combinations, using gender-aware count for Mixed
+        # to avoid inflating the count with gender-invalid combos
+        if gender == "Mixed" and need_men is not None and need_women is not None:
+            eligible_men = [r for r in eligible if r.gender == 'M']
+            eligible_women = [r for r in eligible if r.gender == 'F']
+            if len(eligible_men) < need_men or len(eligible_women) < need_women:
+                return []
+            num_combinations = math_module.comb(len(eligible_men), need_men) * math_module.comb(len(eligible_women), need_women)
+        else:
+            eligible_men = None
+            eligible_women = None
+            n = len(eligible)
+            k = unlocked_seats
+            num_combinations = math_module.comb(n, k)
 
         results = []
 
@@ -2895,21 +2914,77 @@ class LineupOptimizer:
         else:
             rower_adjusted_score = rower_watts.copy()
 
-        # Debug counters
-        debug_counts = {'age_rejected': 0, 'gender_rejected': 0, 'seat_rejected': 0, 'total_tried': 0}
-
-        # Calculate gender needs for Mixed lineups with locked rowers
-        locked_men = sum(1 for name in locked_names if self.roster.get_rower(name) and self.roster.get_rower(name).gender == 'M')
-        locked_women = sum(1 for name in locked_names if self.roster.get_rower(name) and self.roster.get_rower(name).gender == 'F')
-        need_men = (num_seats // 2) - locked_men if gender == "Mixed" else None
-        need_women = (num_seats // 2) - locked_women if gender == "Mixed" else None
 
         if num_combinations <= self.MAX_EXHAUSTIVE_COMBINATIONS:
-            # Exhaustive search - evaluate ALL combinations
-            for combo in combinations(eligible, unlocked_seats):
-                debug_counts['total_tried'] += 1
+            # Exhaustive search with two-phase evaluation:
+            # Phase 1: Fast ranking by pre-computed watts (skip expensive analyze_lineup)
+            # Phase 2: Full evaluation of top candidates only
+            is_sculling = 'x' in boat_class.lower()
+
+            def _fast_screen(combo_rowers):
+                """Quick validity check + watts score without full analyze_lineup."""
+                # Check average age constraint
+                if min_avg_age > 0 or max_avg_age > 0:
+                    avg_age = statistics.mean([r.age for r in combo_rowers])
+                    if avg_age < min_avg_age:
+                        debug_counts['age_rejected'] = debug_counts.get('age_rejected', 0) + 1
+                        return None
+                    if max_avg_age > 0 and avg_age >= max_avg_age:
+                        debug_counts['age_rejected'] = debug_counts.get('age_rejected', 0) + 1
+                        return None
+                # Check seat assignment for sweep boats
+                if not is_sculling:
+                    if locked_rowers:
+                        assigned = self._optimize_seat_assignment_with_locks(combo_rowers, boat_class, locked_rowers)
+                    else:
+                        assigned = self._optimize_seat_assignment(combo_rowers, boat_class)
+                    if assigned is None:
+                        debug_counts['seat_rejected'] = debug_counts.get('seat_rejected', 0) + 1
+                        return None
+                # Score by adjusted score (includes age handicap bonus for adjusted mode,
+                # equals raw watts for raw mode)
+                total_score = sum(rower_adjusted_score.get(r.name, 0) for r in combo_rowers)
+                return total_score
+
+            # Phase 1: Screen all combos quickly
+            scored_combos = []
+            if gender == "Mixed" and eligible_men is not None and eligible_women is not None:
+                for men_combo, women_combo in product(
+                    combinations(eligible_men, need_men),
+                    combinations(eligible_women, need_women)
+                ):
+                    combo = list(men_combo) + list(women_combo)
+                    debug_counts['total_tried'] += 1
+                    score = _fast_screen(combo)
+                    if score is not None:
+                        scored_combos.append((score, combo))
+            else:
+                for combo in combinations(eligible, unlocked_seats):
+                    combo = list(combo)
+                    debug_counts['total_tried'] += 1
+                    # For non-Mixed, also check gender in screening
+                    if gender == "Men's" and any(r.gender != 'M' for r in combo):
+                        debug_counts['gender_rejected'] = debug_counts.get('gender_rejected', 0) + 1
+                        continue
+                    if gender == "Women's" and any(r.gender != 'F' for r in combo):
+                        debug_counts['gender_rejected'] = debug_counts.get('gender_rejected', 0) + 1
+                        continue
+                    if gender == "Mixed":
+                        mc = sum(1 for r in combo if r.gender == 'M')
+                        wc = sum(1 for r in combo if r.gender == 'F')
+                        if mc != wc:
+                            debug_counts['gender_rejected'] = debug_counts.get('gender_rejected', 0) + 1
+                            continue
+                    score = _fast_screen(combo)
+                    if score is not None:
+                        scored_combos.append((score, combo))
+
+            # Phase 2: Full evaluation of top candidates (sorted by watts descending)
+            scored_combos.sort(key=lambda x: x[0], reverse=True)
+            top_n_evaluate = max(num_results * 10, 50)
+            for score, combo in scored_combos[:top_n_evaluate]:
                 result = self._evaluate_lineup(
-                    list(combo), boat_class, target_distance, calc_method, predictor,
+                    combo, boat_class, target_distance, calc_method, predictor,
                     gender, min_avg_age, max_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
                 )
                 if result:
@@ -3096,6 +3171,7 @@ class LineupOptimizer:
                             results.append(result)
 
                 attempts += 1
+
 
         # Sort by optimization target
         if optimize_for == 'adjusted':
@@ -5737,7 +5813,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                     entry = boat_events[boat][event_num][0]
                     boat_schedule.append(f"{color} {time_str} - {entry['boat_class']} {entry['category']}")
 
-                st.markdown(f"**{boat}:** {' → '.join(boat_schedule)}")
+                st.markdown(f"**{boat}:** {' -> '.join(boat_schedule)}")
 
             # Show warning for boats with hot seats
             hot_seat_boats = [b for b in all_boats_used if any(c in ['🟠', '🔴'] for c in boat_colors.get(b, {}).values())]
@@ -7424,6 +7500,7 @@ Clear buttons at the top of each column reset that lineup.
 
                 st.rerun()
 
+
         st.divider()
     else:
         # Dashboard mode: set default values for variables used later
@@ -8190,34 +8267,34 @@ Clear buttons at the top of each column reset that lineup.
             # Copy buttons (also copy cox and boat for coxed boats)
             copy_cols = st.columns(2)
             if key == "lineup_a":
-                if copy_cols[0].button("A→B", key="copy_a_b", use_container_width=True):
+                if copy_cols[0].button("A->B", key="copy_a_b", use_container_width=True):
                     st.session_state.lineup_b = st.session_state.lineup_a.copy()
                     st.session_state.cox_b = st.session_state.cox_a
                     st.session_state.boat_b = st.session_state.boat_a
                     st.rerun()
-                if copy_cols[1].button("A→C", key="copy_a_c", use_container_width=True):
+                if copy_cols[1].button("A->C", key="copy_a_c", use_container_width=True):
                     st.session_state.lineup_c = st.session_state.lineup_a.copy()
                     st.session_state.cox_c = st.session_state.cox_a
                     st.session_state.boat_c = st.session_state.boat_a
                     st.rerun()
             elif key == "lineup_b":
-                if copy_cols[0].button("B→A", key="copy_b_a", use_container_width=True):
+                if copy_cols[0].button("B->A", key="copy_b_a", use_container_width=True):
                     st.session_state.lineup_a = st.session_state.lineup_b.copy()
                     st.session_state.cox_a = st.session_state.cox_b
                     st.session_state.boat_a = st.session_state.boat_b
                     st.rerun()
-                if copy_cols[1].button("B→C", key="copy_b_c", use_container_width=True):
+                if copy_cols[1].button("B->C", key="copy_b_c", use_container_width=True):
                     st.session_state.lineup_c = st.session_state.lineup_b.copy()
                     st.session_state.cox_c = st.session_state.cox_b
                     st.session_state.boat_c = st.session_state.boat_b
                     st.rerun()
             else:
-                if copy_cols[0].button("C→A", key="copy_c_a", use_container_width=True):
+                if copy_cols[0].button("C->A", key="copy_c_a", use_container_width=True):
                     st.session_state.lineup_a = st.session_state.lineup_c.copy()
                     st.session_state.cox_a = st.session_state.cox_c
                     st.session_state.boat_a = st.session_state.boat_c
                     st.rerun()
-                if copy_cols[1].button("C→B", key="copy_c_b", use_container_width=True):
+                if copy_cols[1].button("C->B", key="copy_c_b", use_container_width=True):
                     st.session_state.lineup_b = st.session_state.lineup_c.copy()
                     st.session_state.cox_b = st.session_state.cox_c
                     st.session_state.boat_b = st.session_state.boat_c
