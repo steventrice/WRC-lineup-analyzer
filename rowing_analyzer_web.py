@@ -2474,9 +2474,9 @@ class BoatAnalyzer:
 class LineupOptimizer:
     """Finds optimal lineup combinations based on erg scores and constraints."""
 
-    # Maximum combinations before switching from exhaustive to heuristic search
+    # Maximum combos to fully evaluate in Phase 2 of exhaustive search
     # C(20,8) = 125,970 combinations takes ~1-2 seconds, which is acceptable
-    MAX_EXHAUSTIVE_COMBINATIONS = 500000
+    MAX_PHASE2_EVALUATE = 2000  # Max combos to fully evaluate in Phase 2
 
     def __init__(self, roster: RosterManager, analyzer: BoatAnalyzer):
         self.roster = roster
@@ -2878,300 +2878,111 @@ class LineupOptimizer:
 
         results = []
 
-        # For adjusted optimization, compute handicap-adjusted score for each rower
-        # This helps the heuristic search consider age benefits
-        rower_adjusted_score = {}
-        if optimize_for == 'adjusted':
-            # Handicap formula: adjusted_time = raw_time - ((avg_age - 27)^2) * k * distance_mult
-            # OLDER crews get MORE seconds subtracted, so LOWER adjusted time (faster)
-            # For individual ranking, we want rowers who contribute to lower adjusted time:
-            #   - Higher watts (lower raw time contribution)
-            #   - Higher age (more handicap benefit when averaged into lineup)
-            k_factor = 0.02
-            distance_multiplier = target_distance / 1000
-            for rower in eligible:
-                watts = rower_watts.get(rower.name, 0)
-                # Calculate this rower's handicap contribution (seconds that would be subtracted)
-                handicap_benefit = ((rower.age - 27) ** 2) * k_factor * distance_multiplier
-                # Convert handicap seconds to approximate watts equivalent
-                # ~4 watts ≈ 1 second at typical splits (rough approximation)
-                watts_equivalent_bonus = handicap_benefit * 4
-                # Higher score = better for adjusted time (fast + old)
-                rower_adjusted_score[rower.name] = watts + watts_equivalent_bonus
-        elif optimize_for == 'category':
-            # For category optimization: find fastest raw time that meets min_avg_age
-            # Favor fast rowers, but also consider age to help meet the category minimum
-            # We want rowers who are: fast AND old enough to help meet the threshold
-            for rower in eligible:
-                watts = rower_watts.get(rower.name, 0)
-                # Small bonus for being above min_avg_age (helps ensure we meet threshold)
-                # But primary factor is still speed (watts)
-                age_bonus = 0
-                if min_avg_age > 0 and rower.age >= min_avg_age:
-                    # Rower meets category on their own - small bonus
-                    age_bonus = 10  # Small watts-equivalent bonus
-                rower_adjusted_score[rower.name] = watts + age_bonus
-        else:
-            rower_adjusted_score = rower_watts.copy()
+        # Exhaustive search with two-phase evaluation:
+        # Phase 1: Fast screening of ALL combos (age, seat, projected time)
+        # Phase 2: Full analyze_lineup evaluation of top candidates
+        is_sculling = 'x' in boat_class.lower()
+        k_factor = 0.02
+        distance_multiplier = target_distance / 1000
 
+        # Pre-compute locked rowers' ages/watts for including in crew calculations
+        locked_ages = []
+        locked_watts_list = []
+        for name in locked_names:
+            lr = self.roster.get_rower(name)
+            if lr:
+                locked_ages.append(lr.age)
+                lw = rower_watts.get(name) or self.project_rower_watts(lr, target_distance, predictor)
+                if lw and lw > 0:
+                    locked_watts_list.append(lw)
 
-        if num_combinations <= self.MAX_EXHAUSTIVE_COMBINATIONS:
-            # Exhaustive search with two-phase evaluation:
-            # Phase 1: Fast ranking by pre-computed watts (skip expensive analyze_lineup)
-            # Phase 2: Full evaluation of top candidates only
-            is_sculling = 'x' in boat_class.lower()
+        def _fast_screen(combo_rowers):
+            """Quick validity + exact projected time (matching analyze_lineup formula)."""
+            # Check average age constraint (include locked rowers in avg)
+            combo_ages = [r.age for r in combo_rowers]
+            all_ages = combo_ages + locked_ages
+            avg_age = statistics.mean(all_ages) if all_ages else 27
 
-            def _fast_screen(combo_rowers):
-                """Quick validity check + watts score without full analyze_lineup."""
-                # Check average age constraint
-                if min_avg_age > 0 or max_avg_age > 0:
-                    avg_age = statistics.mean([r.age for r in combo_rowers])
-                    if avg_age < min_avg_age:
-                        debug_counts['age_rejected'] = debug_counts.get('age_rejected', 0) + 1
-                        return None
-                    if max_avg_age > 0 and avg_age >= max_avg_age:
-                        debug_counts['age_rejected'] = debug_counts.get('age_rejected', 0) + 1
-                        return None
-                # Check seat assignment for sweep boats
-                if not is_sculling:
-                    if locked_rowers:
-                        assigned = self._optimize_seat_assignment_with_locks(combo_rowers, boat_class, locked_rowers)
-                    else:
-                        assigned = self._optimize_seat_assignment(combo_rowers, boat_class)
-                    if assigned is None:
-                        debug_counts['seat_rejected'] = debug_counts.get('seat_rejected', 0) + 1
-                        return None
-                # Score by adjusted score (includes age handicap bonus for adjusted mode,
-                # equals raw watts for raw mode)
-                total_score = sum(rower_adjusted_score.get(r.name, 0) for r in combo_rowers)
-                return total_score
+            if min_avg_age > 0 and avg_age < min_avg_age:
+                debug_counts['age_rejected'] = debug_counts.get('age_rejected', 0) + 1
+                return None
+            if max_avg_age > 0 and avg_age >= max_avg_age:
+                debug_counts['age_rejected'] = debug_counts.get('age_rejected', 0) + 1
+                return None
 
-            # Phase 1: Screen all combos quickly
-            scored_combos = []
-            if gender == "Mixed" and eligible_men is not None and eligible_women is not None:
-                for men_combo, women_combo in product(
-                    combinations(eligible_men, need_men),
-                    combinations(eligible_women, need_women)
-                ):
-                    combo = list(men_combo) + list(women_combo)
-                    debug_counts['total_tried'] += 1
-                    score = _fast_screen(combo)
-                    if score is not None:
-                        scored_combos.append((score, combo))
+            # Check seat assignment for sweep boats
+            if not is_sculling:
+                if locked_rowers:
+                    assigned = self._optimize_seat_assignment_with_locks(combo_rowers, boat_class, locked_rowers)
+                else:
+                    assigned = self._optimize_seat_assignment(combo_rowers, boat_class)
+                if assigned is None:
+                    debug_counts['seat_rejected'] = debug_counts.get('seat_rejected', 0) + 1
+                    return None
+
+            # Compute projected time matching analyze_lineup formula exactly
+            combo_watts = [rower_watts.get(r.name, 0) for r in combo_rowers]
+            all_watts = combo_watts + locked_watts_list
+            if any(w <= 0 for w in all_watts):
+                return None
+
+            if calc_method == 'split':
+                splits = [500 * (2.80 / w) ** (1/3) for w in all_watts]
+                boat_split = statistics.mean(splits)
             else:
-                for combo in combinations(eligible, unlocked_seats):
-                    combo = list(combo)
-                    debug_counts['total_tried'] += 1
-                    # For non-Mixed, also check gender in screening
-                    if gender == "Men's" and any(r.gender != 'M' for r in combo):
-                        debug_counts['gender_rejected'] = debug_counts.get('gender_rejected', 0) + 1
-                        continue
-                    if gender == "Women's" and any(r.gender != 'F' for r in combo):
-                        debug_counts['gender_rejected'] = debug_counts.get('gender_rejected', 0) + 1
-                        continue
-                    if gender == "Mixed":
-                        mc = sum(1 for r in combo if r.gender == 'M')
-                        wc = sum(1 for r in combo if r.gender == 'F')
-                        if mc != wc:
-                            debug_counts['gender_rejected'] = debug_counts.get('gender_rejected', 0) + 1
-                            continue
-                    score = _fast_screen(combo)
-                    if score is not None:
-                        scored_combos.append((score, combo))
+                boat_split = 500 * (2.80 / statistics.mean(all_watts)) ** (1/3)
 
-            # Phase 2: Full evaluation of top candidates (sorted by watts descending)
-            scored_combos.sort(key=lambda x: x[0], reverse=True)
-            top_n_evaluate = max(num_results * 10, 50)
-            for score, combo in scored_combos[:top_n_evaluate]:
-                result = self._evaluate_lineup(
-                    combo, boat_class, target_distance, calc_method, predictor,
-                    gender, min_avg_age, max_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
-                )
-                if result:
-                    results.append(result)
-        else:
-            # Heuristic search: greedy with diversity
-            seen_combos = set()
+            raw_time = (boat_split / 500) * target_distance
 
-            # For adjusted optimization, first try age-optimized combinations
             if optimize_for == 'adjusted':
-                # Sort by age descending (older = more handicap benefit)
-                age_sorted = sorted(eligible, key=lambda r: r.age, reverse=True)
-                # Try top N oldest rowers as a baseline
-                if len(age_sorted) >= unlocked_seats:
-                    if gender == "Mixed" and need_men is not None and need_women is not None:
-                        # For Mixed with locks, get oldest from each gender based on what's still needed
-                        males_by_age = sorted([r for r in eligible if r.gender == 'M'], key=lambda r: r.age, reverse=True)
-                        females_by_age = sorted([r for r in eligible if r.gender == 'F'], key=lambda r: r.age, reverse=True)
-                        if len(males_by_age) >= need_men and len(females_by_age) >= need_women:
-                            oldest_combo = males_by_age[:need_men] + females_by_age[:need_women]
-                        else:
-                            oldest_combo = []
-                    else:
-                        oldest_combo = age_sorted[:unlocked_seats]
+                handicap = ((avg_age - 27) ** 2) * k_factor * distance_multiplier
+                return -(raw_time - handicap)  # Negate: lower adjusted time = better
+            else:
+                return -raw_time  # Negate: lower raw time = better
 
-                    if len(oldest_combo) == unlocked_seats:
-                        combo_key = tuple(sorted(r.name for r in oldest_combo))
-                        seen_combos.add(combo_key)
-                        debug_counts['total_tried'] += 1
-                        result = self._evaluate_lineup(
-                            oldest_combo, boat_class, target_distance, calc_method, predictor,
-                            gender, min_avg_age, max_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
-                        )
-                        if result:
-                            results.append(result)
+        # Phase 1: Screen all combos quickly
+        scored_combos = []
+        if gender == "Mixed" and eligible_men is not None and eligible_women is not None:
+            for men_combo, women_combo in product(
+                combinations(eligible_men, need_men),
+                combinations(eligible_women, need_women)
+            ):
+                combo = list(men_combo) + list(women_combo)
+                debug_counts['total_tried'] += 1
+                score = _fast_screen(combo)
+                if score is not None:
+                    scored_combos.append((score, combo))
+        else:
+            for combo in combinations(eligible, unlocked_seats):
+                combo = list(combo)
+                debug_counts['total_tried'] += 1
+                # For non-Mixed, also check gender in screening
+                if gender == "Men's" and any(r.gender != 'M' for r in combo):
+                    debug_counts['gender_rejected'] = debug_counts.get('gender_rejected', 0) + 1
+                    continue
+                if gender == "Women's" and any(r.gender != 'F' for r in combo):
+                    debug_counts['gender_rejected'] = debug_counts.get('gender_rejected', 0) + 1
+                    continue
+                if gender == "Mixed":
+                    mc = sum(1 for r in combo if r.gender == 'M')
+                    wc = sum(1 for r in combo if r.gender == 'F')
+                    if mc != wc:
+                        debug_counts['gender_rejected'] = debug_counts.get('gender_rejected', 0) + 1
+                        continue
+                score = _fast_screen(combo)
+                if score is not None:
+                    scored_combos.append((score, combo))
 
-            # Sort by appropriate score (raw watts or adjusted score)
-            sort_score = rower_adjusted_score if optimize_for == 'adjusted' else rower_watts
-            sorted_rowers = sorted(eligible, key=lambda r: sort_score.get(r.name, 0), reverse=True)
-
-            # For Mixed gender, separate by gender for 50/50 split combo building
-            if gender == "Mixed" and need_men is not None and need_women is not None:
-                males_sorted = [r for r in sorted_rowers if r.gender == 'M']
-                females_sorted = [r for r in sorted_rowers if r.gender == 'F']
-                # Need enough of each gender to fill unlocked seats
-                if len(males_sorted) < need_men or len(females_sorted) < need_women:
-                    return []  # Can't form a 50/50 mixed lineup
-
-            # Also try the top-scored rowers as another baseline
-            if len(sorted_rowers) >= unlocked_seats:
-                if gender == "Mixed" and need_men is not None and need_women is not None:
-                    # For Mixed, build gender split based on what's still needed
-                    top_combo = males_sorted[:need_men] + females_sorted[:need_women]
-                else:
-                    top_combo = sorted_rowers[:unlocked_seats]
-
-                if len(top_combo) == unlocked_seats:
-                    combo_key = tuple(sorted(r.name for r in top_combo))
-                    if combo_key not in seen_combos:
-                        seen_combos.add(combo_key)
-                        debug_counts['total_tried'] += 1
-                        result = self._evaluate_lineup(
-                            top_combo, boat_class, target_distance, calc_method, predictor,
-                            gender, min_avg_age, max_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
-                        )
-                        if result:
-                            results.append(result)
-
-            # Try strategic age-balanced combinations when age constraint is active
-            if min_avg_age > 0:
-                if gender == "Mixed" and need_men is not None and need_women is not None:
-                    # For Mixed category, do age/speed balancing within each gender
-                    males_by_age = sorted(males_sorted, key=lambda r: r.age, reverse=True)
-                    females_by_age = sorted(females_sorted, key=lambda r: r.age, reverse=True)
-
-                    # Try mixing: N fastest + (need-N) oldest, for each gender
-                    for num_fast_m in range(need_men + 1):
-                        num_old_m = need_men - num_fast_m
-                        fast_males = males_sorted[:num_fast_m]
-                        old_males = [r for r in males_by_age if r not in fast_males][:num_old_m]
-
-                        for num_fast_f in range(need_women + 1):
-                            num_old_f = need_women - num_fast_f
-                            fast_females = females_sorted[:num_fast_f]
-                            old_females = [r for r in females_by_age if r not in fast_females][:num_old_f]
-
-                            combo = fast_males + old_males + fast_females + old_females
-                            if len(combo) == unlocked_seats:
-                                combo_key = tuple(sorted(r.name for r in combo))
-                                if combo_key not in seen_combos:
-                                    seen_combos.add(combo_key)
-                                    debug_counts['total_tried'] += 1
-                                    result = self._evaluate_lineup(
-                                        combo, boat_class, target_distance, calc_method, predictor,
-                                        gender, min_avg_age, max_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
-                                    )
-                                    if result:
-                                        results.append(result)
-                else:
-                    # Sort by age and watts separately
-                    by_age = sorted(eligible, key=lambda r: r.age, reverse=True)
-                    by_watts = sorted(eligible, key=lambda r: rower_watts.get(r.name, 0), reverse=True)
-
-                    # Try mixing: N fastest + (seats-N) oldest, for various N
-                    for num_fast in range(unlocked_seats + 1):
-                        num_old = unlocked_seats - num_fast
-                        fast_rowers = by_watts[:num_fast]
-                        # Get oldest rowers not already in fast list
-                        old_rowers = [r for r in by_age if r not in fast_rowers][:num_old]
-
-                        if len(fast_rowers) + len(old_rowers) == unlocked_seats:
-                            combo = fast_rowers + old_rowers
-                            combo_key = tuple(sorted(r.name for r in combo))
-                            if combo_key not in seen_combos:
-                                seen_combos.add(combo_key)
-                                debug_counts['total_tried'] += 1
-                                result = self._evaluate_lineup(
-                                    combo, boat_class, target_distance, calc_method, predictor,
-                                    gender, min_avg_age, max_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
-                                )
-                                if result:
-                                    results.append(result)
-
-            # Generate diverse lineups by varying top selections
-            attempts = 0
-            max_attempts = self.MAX_EXHAUSTIVE_COMBINATIONS
-            # Ensure we explore at least 100 valid candidates for better diversity
-            min_candidates = max(100, num_results * 20)
-
-            while len(results) < min_candidates and attempts < max_attempts:
-                # Greedy selection with some randomization
-                import random
-                selected = []
-
-                if gender == "Mixed" and need_men is not None and need_women is not None:
-                    # For Mixed, select from each gender pool based on what's needed
-                    male_pool = males_sorted.copy()
-                    female_pool = females_sorted.copy()
-
-                    # Select needed men
-                    for _ in range(need_men):
-                        if not male_pool:
-                            break
-                        top_n = 5 if optimize_for == 'adjusted' else 3
-                        candidates = male_pool[:min(top_n, len(male_pool))]
-                        weights = list(range(top_n, 0, -1))[:len(candidates)]
-                        chosen = random.choices(candidates, weights=weights)[0]
-                        selected.append(chosen)
-                        male_pool.remove(chosen)
-
-                    # Select needed women
-                    for _ in range(need_women):
-                        if not female_pool:
-                            break
-                        top_n = 5 if optimize_for == 'adjusted' else 3
-                        candidates = female_pool[:min(top_n, len(female_pool))]
-                        weights = list(range(top_n, 0, -1))[:len(candidates)]
-                        chosen = random.choices(candidates, weights=weights)[0]
-                        selected.append(chosen)
-                        female_pool.remove(chosen)
-                else:
-                    pool = sorted_rowers.copy()
-                    for _ in range(unlocked_seats):
-                        if not pool:
-                            break
-                        # Take from top candidates with weighted random (more diversity for adjusted)
-                        top_n = 5 if optimize_for == 'adjusted' else 3
-                        candidates = pool[:min(top_n, len(pool))]
-                        weights = list(range(top_n, 0, -1))[:len(candidates)]
-                        chosen = random.choices(candidates, weights=weights)[0]
-                        selected.append(chosen)
-                        pool.remove(chosen)
-
-                if len(selected) == unlocked_seats:
-                    combo_key = tuple(sorted(r.name for r in selected))
-                    if combo_key not in seen_combos:
-                        seen_combos.add(combo_key)
-                        debug_counts['total_tried'] += 1
-                        result = self._evaluate_lineup(
-                            selected, boat_class, target_distance, calc_method, predictor,
-                            gender, min_avg_age, max_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
-                        )
-                        if result:
-                            results.append(result)
-
-                attempts += 1
-
+        # Phase 2: Full evaluation of top candidates (sorted by score descending)
+        scored_combos.sort(key=lambda x: x[0], reverse=True)
+        top_n_evaluate = min(len(scored_combos), self.MAX_PHASE2_EVALUATE)
+        for score, combo in scored_combos[:top_n_evaluate]:
+            result = self._evaluate_lineup(
+                combo, boat_class, target_distance, calc_method, predictor,
+                gender, min_avg_age, max_avg_age, rower_watts, debug_counts, locked_rowers, num_seats
+            )
+            if result:
+                results.append(result)
 
         # Sort by optimization target
         if optimize_for == 'adjusted':
