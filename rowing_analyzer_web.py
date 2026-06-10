@@ -236,6 +236,7 @@ class RegattaEvent:
     event_name: str        # "Mixed Masters 8+"
     include: bool          # Targeted event
     priority: bool         # Priority event
+    stage: str = ""        # "Heat 1", "Heat 2", "Final", or "" (straight final)
 
 
 @dataclass
@@ -470,6 +471,44 @@ def assign_synthetic_times(event_numbers_with_times: dict, spacing_minutes: int 
     return result
 
 
+def build_final_to_heats(events: List) -> dict:
+    """Group events by name; map each final's event_number to its linked heat events.
+
+    Events with the same event_name are grouped. Within a group, events whose
+    stage contains 'heat' (case-insensitive) are heats; the remainder is the final.
+    Returns {final_event_number: [heat RegattaEvent, ...]}.
+    """
+    from collections import defaultdict
+
+    # Group events by event_name (case-insensitive)
+    name_groups = defaultdict(list)
+    for event in events:
+        name_groups[event.event_name.strip().lower()].append(event)
+
+    final_to_heats = {}
+    for name_key, group in name_groups.items():
+        if len(group) < 2:
+            continue  # No heat/final split possible
+
+        heats = []
+        finals = []
+        for event in group:
+            stage = getattr(event, 'stage', '') or ''
+            if 'heat' in stage.lower():
+                heats.append(event)
+            else:
+                finals.append(event)
+
+        if not heats or not finals:
+            continue  # No clear heat/final pairing
+
+        # Use the first final (typically there's only one)
+        final = finals[0]
+        final_to_heats[final.event_number] = heats
+
+    return final_to_heats
+
+
 def get_hot_seat_rowers(target_event_time: str, target_regatta: str, target_day: str,
                         entries: List[dict], events: List, threshold_minutes: int,
                         target_event_number: int = None) -> Set[str]:
@@ -521,12 +560,44 @@ def get_hot_seat_rowers(target_event_time: str, target_regatta: str, target_day:
     # Fill in synthetic times (5-min spacing) for events without real times
     event_times = assign_synthetic_times(event_times)
 
+    # Build heat/final linkage: final_event_number -> [heat events]
+    final_to_heats = build_final_to_heats(events)
+    # Also build reverse map: heat_event_number -> final_event_number
+    heat_to_final = {}
+    for final_num, heat_events in final_to_heats.items():
+        for h in heat_events:
+            heat_to_final[h.event_number] = final_num
+
+    # Build map of final_event_number -> [parsed heat times]
+    final_to_heat_times = {}
+    for final_num, heat_events in final_to_heats.items():
+        final_to_heat_times[final_num] = [
+            event_times.get(h.event_number) for h in heat_events
+            if event_times.get(h.event_number) is not None
+        ]
+
     # Resolve target time: prefer parsed real time, fall back to synthetic
     target_time = parse_time(target_event_time)
     if not target_time and target_event_number is not None:
         target_time = event_times.get(target_event_number)
     if not target_time:
         return hot_seat_rowers
+
+    # Expand target times: if the target event has linked heats, include those times too
+    target_times = [target_time]
+    if target_event_number is not None:
+        # If target is a final, add its heat times
+        for ht in final_to_heat_times.get(target_event_number, []):
+            target_times.append(ht)
+        # If target is a heat, add the final's time and sibling heat times
+        if target_event_number in heat_to_final:
+            final_num = heat_to_final[target_event_number]
+            final_time = event_times.get(final_num)
+            if final_time:
+                target_times.append(final_time)
+            for ht in final_to_heat_times.get(final_num, []):
+                if ht != target_time:
+                    target_times.append(ht)
 
     # Check each entry for the same regatta/day
     # Handle regatta names that may have day appended (e.g., "Covered Bridge|Saturday, April 25, 2026")
@@ -543,26 +614,41 @@ def get_hot_seat_rowers(target_event_time: str, target_regatta: str, target_day:
         if normalize_day_format(entry.get('day', '')) != normalized_target_day:
             continue
 
-        # Get entry's event time
+        # Get entry's event time(s) — expand with linked heat/final times
         entry_event_num = entry.get('event_number')
+        entry_racing_times = []
         entry_time = event_times.get(entry_event_num)
-
-        # Fallback: try to parse event_time from entry itself
         if not entry_time:
             entry_time = parse_time(entry.get('event_time', ''))
+        if entry_time:
+            entry_racing_times.append(entry_time)
 
-        if not entry_time:
+        # If entry is in a final, also consider its heat times
+        for ht in final_to_heat_times.get(entry_event_num, []):
+            entry_racing_times.append(ht)
+        # If entry is in a heat, also consider the final's time
+        if entry_event_num in heat_to_final:
+            final_num = heat_to_final[entry_event_num]
+            final_time = event_times.get(final_num)
+            if final_time:
+                entry_racing_times.append(final_time)
+
+        if not entry_racing_times:
             continue
 
-        # Calculate time difference in minutes
-        delta_minutes = abs((entry_time - target_time).total_seconds() / 60)
-
-        # If within threshold, add all rowers from this entry
-        if delta_minutes < threshold_minutes and delta_minutes > 0:  # Exclude the target event itself
-            rowers = entry.get('rowers', [])
-            for rower in rowers:
-                if rower:  # Skip empty strings
-                    hot_seat_rowers.add(rower)
+        # Check all combinations of entry racing times × target times
+        for e_time in entry_racing_times:
+            for t_time in target_times:
+                delta_minutes = abs((e_time - t_time).total_seconds() / 60)
+                if delta_minutes < threshold_minutes and delta_minutes > 0:
+                    rowers = entry.get('rowers', [])
+                    for rower in rowers:
+                        if rower:
+                            hot_seat_rowers.add(rower)
+                    break  # Found a conflict, no need to check more time combos for this entry
+            else:
+                continue
+            break  # Break outer loop too
 
     return hot_seat_rowers
 
@@ -1780,6 +1866,7 @@ class RosterManager:
             col_c = row.iloc[2] if len(row) > 2 else None
             col_d = row.iloc[3] if len(row) > 3 else None
             col_e = row.iloc[4] if len(row) > 4 else None
+            col_f = row.iloc[5] if len(row) > 5 else None
 
             # Convert to strings for checking
             str_a = str(col_a).strip() if pd.notna(col_a) else ""
@@ -1835,9 +1922,18 @@ class RosterManager:
                 event_time = str_b
                 event_name = str_c
 
-                # Parse Include and Priority booleans
-                include = parse_bool(col_d, default=False)
-                priority = parse_bool(col_e, default=False)
+                # Detect layout: old (D=Include, E=Priority) vs new (D=Stage, E=Include, F=Priority)
+                str_d = str(col_d).strip() if pd.notna(col_d) else ""
+                if str_d.upper() in ('TRUE', 'FALSE', '1', '0', ''):
+                    # Old layout — no Stage column
+                    stage = ""
+                    include = parse_bool(col_d, default=False)
+                    priority = parse_bool(col_e, default=False)
+                else:
+                    # New layout — D is Stage
+                    stage = str_d
+                    include = parse_bool(col_e, default=False)
+                    priority = parse_bool(col_f, default=False)
 
                 event = RegattaEvent(
                     regatta=current_regatta,
@@ -1846,7 +1942,8 @@ class RosterManager:
                     event_time=event_time,
                     event_name=event_name,
                     include=include,
-                    priority=priority
+                    priority=priority,
+                    stage=stage
                 )
 
                 key = f"{current_regatta}|{current_day}"
@@ -3631,7 +3728,11 @@ def reconcile_entry_events(entries: List[dict], regatta_events: dict) -> tuple:
             regatta_lower = event.regatta.lower().strip()
             day_lower = normalize_day_format(event.day).lower().strip()
             name_lower = event.event_name.lower().strip()
-            event_lookup[(regatta_lower, day_lower, name_lower)] = event
+            lookup_key = (regatta_lower, day_lower, name_lower)
+            # Prefer finals over heats: only overwrite if new event is NOT a heat
+            is_heat = bool(getattr(event, 'stage', '') and 'heat' in event.stage.lower())
+            if lookup_key not in event_lookup or not is_heat:
+                event_lookup[lookup_key] = event
             event_num_lookup[(regatta_lower, day_lower, event.event_number)] = event
             known_regatta_days.add((regatta_lower, day_lower))
 
@@ -5043,6 +5144,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
 
     # First, add all targeted events from the regatta_events data
     regatta_events_list = roster_manager.regatta_events.get(selected_regatta, [])
+    final_to_heats = build_final_to_heats(regatta_events_list)
     for event in regatta_events_list:
         if event.include:  # Only targeted events
             events_dict[event.event_number] = {
@@ -5050,7 +5152,8 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                 'name': event.event_name,
                 'time': event.event_time,
                 'parsed_time': parse_time_for_sort(event.event_time),
-                'has_entries': False
+                'has_entries': False,
+                'stage': event.stage
             }
 
     # Then, add/update events from entries
@@ -5058,12 +5161,19 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
         event_num = entry.get('event_number')
         events_with_entries.add(event_num)
         if event_num not in events_dict:
+            # Look up stage from regatta_events_list
+            entry_stage = ''
+            for re_evt in regatta_events_list:
+                if re_evt.event_number == event_num:
+                    entry_stage = re_evt.stage
+                    break
             events_dict[event_num] = {
                 'number': event_num,
                 'name': entry.get('event_name', ''),
                 'time': entry.get('event_time', ''),
                 'parsed_time': parse_time_for_sort(entry.get('event_time', '')),
-                'has_entries': True
+                'has_entries': True,
+                'stage': entry_stage
             }
         else:
             events_dict[event_num]['has_entries'] = True
@@ -5148,6 +5258,46 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                     'entry_num': entry_num,
                     'needs_cox': needs_cox
                 })
+
+    # 3b. Propagate final entries to linked heat events
+    for final_num, heat_events in final_to_heats.items():
+        heat_nums = [h.event_number for h in heat_events]
+        # Propagate athlete entries
+        for athlete in all_athletes:
+            if final_num in athlete_events[athlete]:
+                for heat_num in heat_nums:
+                    if heat_num not in athlete_events[athlete]:
+                        # Copy entries with 'inherited' flag
+                        athlete_events[athlete][heat_num] = [
+                            {**e, 'inherited': True} for e in athlete_events[athlete][final_num]
+                        ]
+                    # Ensure heat event appears in events_dict
+                    if heat_num not in events_dict:
+                        for h_evt in heat_events:
+                            if h_evt.event_number == heat_num:
+                                events_dict[heat_num] = {
+                                    'number': heat_num,
+                                    'name': h_evt.event_name,
+                                    'time': h_evt.event_time,
+                                    'parsed_time': parse_time_for_sort(h_evt.event_time),
+                                    'has_entries': True,
+                                    'stage': h_evt.stage
+                                }
+                                break
+                    else:
+                        events_dict[heat_num]['has_entries'] = True
+
+        # Propagate boat entries
+        for boat in list(boat_events.keys()):
+            if final_num in boat_events[boat]:
+                for heat_num in heat_nums:
+                    if heat_num not in boat_events[boat]:
+                        boat_events[boat][heat_num] = [
+                            {**e, 'inherited': True} for e in boat_events[boat][final_num]
+                        ]
+
+    # Re-sort events after potential additions from heat propagation
+    sorted_events = sorted(events_dict.values(), key=lambda e: (e['parsed_time'] or datetime.min, e['number']))
 
     # 4. Calculate hot seating colors for each athlete
     def get_minutes_between(time1, time2):
@@ -5276,9 +5426,12 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
         else:
             st.metric("Conflicts", 0)
 
-    # Athlete event count breakdown
+    # Athlete event count breakdown (exclude inherited entries from count)
     from collections import Counter
-    event_counts = Counter(len(athlete_events[athlete]) for athlete in all_athletes)
+    def _non_inherited_event_count(athlete):
+        return sum(1 for entries in athlete_events[athlete].values()
+                   if not entries[0].get('inherited', False))
+    event_counts = Counter(_non_inherited_event_count(athlete) for athlete in all_athletes)
 
     breakdown_parts = []
     for count in sorted(event_counts.keys()):
@@ -5505,12 +5658,14 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                 if event_num in athlete_events[athlete]:
                     entries = athlete_events[athlete][event_num]
                     color = athlete_colors[athlete].get(event_num, "⚪")
+                    is_inherited = entries[0].get('inherited', False) if entries else False
+                    inherited_style = 'opacity:0.5;' if is_inherited else ''
 
                     # Check for conflict
                     if len(entries) > 1:
                         time_str = format_event_time_func(event['time']) if event['time'] else ""
                         tooltip = f"CONFLICT: {event['name']} @ {time_str}"
-                        minimap_html += f'<td class="minimap-cell minimap-conflict" title="{tooltip}"></td>'
+                        minimap_html += f'<td class="minimap-cell minimap-conflict" title="{tooltip}" style="{inherited_style}"></td>'
                     else:
                         entry_info = entries[0]
                         needs_cox = entry_info['needs_cox']
@@ -5528,10 +5683,12 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
 
                         cox_class = 'minimap-cox-warning' if needs_cox else ''
                         tooltip = f"{event['name']} @ {time_str}\\n{seat} in {boat}"
+                        if is_inherited:
+                            tooltip += "\\n(inherited from final)"
                         if needs_cox:
                             tooltip += "\\nNeeds Cox!"
 
-                        minimap_html += f'<td class="minimap-cell {color_class} {cox_class}" title="{tooltip}"></td>'
+                        minimap_html += f'<td class="minimap-cell {color_class} {cox_class}" title="{tooltip}" style="{inherited_style}"></td>'
                 else:
                     # Empty cell - gray if event exists but rower not entered
                     if has_entries:
@@ -5562,6 +5719,8 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                         entries = boat_events[boat][event_num]
                         color = boat_colors[boat].get(event_num, "⚪")
                         time_str = format_event_time_func(event['time']) if event['time'] else ""
+                        is_inherited = entries[0].get('inherited', False) if entries else False
+                        inherited_style = 'opacity:0.5;' if is_inherited else ''
 
                         # Map emoji color to CSS class
                         color_class = {
@@ -5573,8 +5732,10 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
 
                         entry_info = entries[0]
                         tooltip = f"{event['name']} @ {time_str}\\n{boat} ({entry_info['boat_class']})"
+                        if is_inherited:
+                            tooltip += "\\n(inherited from final)"
 
-                        minimap_html += f'<td class="minimap-cell {color_class}" title="{tooltip}"></td>'
+                        minimap_html += f'<td class="minimap-cell {color_class}" title="{tooltip}" style="{inherited_style}"></td>'
                     else:
                         # Empty cell - gray if event exists but boat not used
                         if has_entries:
@@ -5766,12 +5927,15 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
     for event in sorted_events:
         time_display = format_event_time_func(event['time']) if event['time'] else ""
         event_name = event['name']
+        stage = event.get('stage', '')
         has_entries = event.get('has_entries', False)
         header_class = "event-header" if has_entries else "event-header no-entries-header"
+        stage_html = f'<div class="event-stage" style="font-size:0.7em;color:#888;font-style:italic;">{stage}</div>' if stage else ''
         # Create tooltip with full name
-        html += f'''<th class="{header_class}" title="{event_name}">
+        html += f'''<th class="{header_class}" title="{event_name}{(' - ' + stage) if stage else ''}">
             <div class="event-time">{time_display}</div>
             <div class="event-name">{event_name}</div>
+            {stage_html}
         </th>'''
 
     html += "</tr></thead><tbody>"
@@ -5780,7 +5944,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
     for athlete in all_athletes:
         has_conflict = any(len(entries) > 1 for entries in athlete_events[athlete].values())
         prefix = "⚠️ " if has_conflict else ""
-        event_count = len(athlete_events[athlete])
+        event_count = _non_inherited_event_count(athlete)
         count_display = f" ({event_count})" if event_count > 0 else ""
 
         html += f'<tr><td class="athlete-name">{prefix}{athlete}{count_display}</td>'
@@ -5792,9 +5956,11 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
             if event_num in athlete_events[athlete]:
                 entries = athlete_events[athlete][event_num]
                 color = athlete_colors[athlete].get(event_num, "⚪")
+                is_inherited = entries[0].get('inherited', False) if entries else False
+                opacity_style = ' style="opacity:0.5;"' if is_inherited else ''
 
                 if len(entries) > 1:
-                    html += '<td class="conflict-cell"><span class="cell-content">⚠️ CONFLICT</span></td>'
+                    html += f'<td class="conflict-cell"{opacity_style}><span class="cell-content">⚠️ CONFLICT</span></td>'
                 else:
                     entry_info = entries[0]
                     cox_warning = "📣" if entry_info['needs_cox'] else ""
@@ -5802,8 +5968,9 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                     seat = entry_info['seat']
                     club_boat = entry_info.get('club_boat', '')
                     club_boat_display = f'<span class="boat-name">{club_boat}</span>' if club_boat else ''
+                    inherited_label = " (from final)" if is_inherited else ""
                     # Tooltip with boat class
-                    html += f'<td title="{boat}"><span class="cell-content">{color} {seat}{cox_warning}</span>{club_boat_display}</td>'
+                    html += f'<td title="{boat}{inherited_label}"{opacity_style}><span class="cell-content">{color} {seat}{cox_warning}</span>{club_boat_display}</td>'
             else:
                 # Empty cell - gray if event has no entries at all
                 cell_class = "no-entries-cell" if not has_entries else ""
@@ -8186,9 +8353,11 @@ Clear buttons at the top of each column reset that lineup.
                     # Get events to check eligibility against
                     available_events = roster_manager.regatta_events.get(selected_regatta, [])
 
-                    # Find eligible events
+                    # Find eligible events (skip heats — enter lineup on the final)
                     eligible_events = []
                     for event in available_events:
+                        if event.stage and 'heat' in event.stage.lower():
+                            continue
                         if is_lineup_eligible_for_event(lineup_gender, avg_age, boat_class, event):
                             eligible_events.append(event)
 
