@@ -5269,13 +5269,14 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                     'needs_cox': needs_cox
                 })
 
-    # 3b. Propagate final entries to linked heat events
+    # 3b. Propagate final entries to included heat events only
     for final_num, heat_events in final_to_heats.items():
-        heat_nums = [h.event_number for h in heat_events]
+        included_heats = [h for h in heat_events if h.include]
+        included_heat_nums = [h.event_number for h in included_heats]
         # Propagate athlete entries
         for athlete in all_athletes:
             if final_num in athlete_events[athlete]:
-                for heat_num in heat_nums:
+                for heat_num in included_heat_nums:
                     if heat_num not in athlete_events[athlete]:
                         # Copy entries with 'inherited' flag
                         athlete_events[athlete][heat_num] = [
@@ -5288,7 +5289,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
         # Propagate boat entries
         for boat in list(boat_events.keys()):
             if final_num in boat_events[boat]:
-                for heat_num in heat_nums:
+                for heat_num in included_heat_nums:
                     if heat_num not in boat_events[boat]:
                         boat_events[boat][heat_num] = [
                             {**e, 'inherited': True} for e in boat_events[boat][final_num]
@@ -7562,14 +7563,14 @@ Clear buttons at the top of each column reset that lineup.
                     if regatta_match and is_name_in_list(rower_name, rowers_list):
                         event_numbers.append(entry.get('event_number'))
                 has_conflict = len(event_numbers) != len(set(event_numbers))
-                # Expand count with linked heats: each final entry implies racing in its heats too
+                # Expand count with included heats: each final entry implies racing in its targeted heats
                 regatta_events_list = roster_manager.regatta_events.get(selected_regatta, [])
                 if regatta_events_list:
                     f2h = build_final_to_heats(regatta_events_list)
                     heat_count = 0
                     for evt_num in set(event_numbers):
                         if evt_num in f2h:
-                            heat_count += len(f2h[evt_num])
+                            heat_count += sum(1 for h in f2h[evt_num] if h.include)
                     total_races = len(event_numbers) + heat_count
                 else:
                     total_races = len(event_numbers)
