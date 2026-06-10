@@ -5432,12 +5432,11 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
         else:
             st.metric("Conflicts", 0)
 
-    # Athlete event count breakdown (exclude inherited entries from count)
+    # Athlete event count breakdown (includes heats — each heat is a race)
     from collections import Counter
-    def _non_inherited_event_count(athlete):
-        return sum(1 for entries in athlete_events[athlete].values()
-                   if not entries[0].get('inherited', False))
-    event_counts = Counter(_non_inherited_event_count(athlete) for athlete in all_athletes)
+    def _total_race_count(athlete):
+        return len(athlete_events[athlete])
+    event_counts = Counter(_total_race_count(athlete) for athlete in all_athletes)
 
     breakdown_parts = []
     for count in sorted(event_counts.keys()):
@@ -5950,7 +5949,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
     for athlete in all_athletes:
         has_conflict = any(len(entries) > 1 for entries in athlete_events[athlete].values())
         prefix = "⚠️ " if has_conflict else ""
-        event_count = _non_inherited_event_count(athlete)
+        event_count = _total_race_count(athlete)
         count_display = f" ({event_count})" if event_count > 0 else ""
 
         html += f'<tr><td class="athlete-name">{prefix}{athlete}{count_display}</td>'
@@ -7563,7 +7562,18 @@ Clear buttons at the top of each column reset that lineup.
                     if regatta_match and is_name_in_list(rower_name, rowers_list):
                         event_numbers.append(entry.get('event_number'))
                 has_conflict = len(event_numbers) != len(set(event_numbers))
-                return len(event_numbers), has_conflict
+                # Expand count with linked heats: each final entry implies racing in its heats too
+                regatta_events_list = roster_manager.regatta_events.get(selected_regatta, [])
+                if regatta_events_list:
+                    f2h = build_final_to_heats(regatta_events_list)
+                    heat_count = 0
+                    for evt_num in set(event_numbers):
+                        if evt_num in f2h:
+                            heat_count += len(f2h[evt_num])
+                    total_races = len(event_numbers) + heat_count
+                else:
+                    total_races = len(event_numbers)
+                return total_races, has_conflict
             except Exception as e:
                 st.error(f"Error in count_events_entered: {e}")
                 return 0, False
