@@ -1859,6 +1859,16 @@ class RosterManager:
         current_day = None
         events_loaded = 0
 
+        # Pre-scan: detect if sheet has a Stage column (new layout)
+        # If ANY event row has a non-boolean value in column D, the sheet uses the new layout
+        has_stage_column = False
+        for idx, row in df.iterrows():
+            col_d_scan = row.iloc[3] if len(row) > 3 else None
+            str_d_scan = str(col_d_scan).strip() if pd.notna(col_d_scan) else ""
+            if str_d_scan and str_d_scan.upper() not in ('TRUE', 'FALSE', '1', '0'):
+                has_stage_column = True
+                break
+
         for idx, row in df.iterrows():
             # Get values from first few columns
             col_a = row.iloc[0] if len(row) > 0 else None
@@ -1922,18 +1932,18 @@ class RosterManager:
                 event_time = str_b
                 event_name = str_c
 
-                # Detect layout: old (D=Include, E=Priority) vs new (D=Stage, E=Include, F=Priority)
-                str_d = str(col_d).strip() if pd.notna(col_d) else ""
-                if str_d.upper() in ('TRUE', 'FALSE', '1', '0', ''):
-                    # Old layout — no Stage column
-                    stage = ""
-                    include = parse_bool(col_d, default=False)
-                    priority = parse_bool(col_e, default=False)
-                else:
-                    # New layout — D is Stage
+                # Parse columns based on detected layout
+                if has_stage_column:
+                    # New layout: D=Stage, E=Include, F=Priority
+                    str_d = str(col_d).strip() if pd.notna(col_d) else ""
                     stage = str_d
                     include = parse_bool(col_e, default=False)
                     priority = parse_bool(col_f, default=False)
+                else:
+                    # Old layout: D=Include, E=Priority (no Stage column)
+                    stage = ""
+                    include = parse_bool(col_d, default=False)
+                    priority = parse_bool(col_e, default=False)
 
                 event = RegattaEvent(
                     regatta=current_regatta,
@@ -5271,20 +5281,8 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                         athlete_events[athlete][heat_num] = [
                             {**e, 'inherited': True} for e in athlete_events[athlete][final_num]
                         ]
-                    # Ensure heat event appears in events_dict
-                    if heat_num not in events_dict:
-                        for h_evt in heat_events:
-                            if h_evt.event_number == heat_num:
-                                events_dict[heat_num] = {
-                                    'number': heat_num,
-                                    'name': h_evt.event_name,
-                                    'time': h_evt.event_time,
-                                    'parsed_time': parse_time_for_sort(h_evt.event_time),
-                                    'has_entries': True,
-                                    'stage': h_evt.stage
-                                }
-                                break
-                    else:
+                    # Mark existing heat columns as having entries (only if already targeted)
+                    if heat_num in events_dict:
                         events_dict[heat_num]['has_entries'] = True
 
         # Propagate boat entries
@@ -5296,8 +5294,18 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
                             {**e, 'inherited': True} for e in boat_events[boat][final_num]
                         ]
 
-    # Re-sort events after potential additions from heat propagation
-    sorted_events = sorted(events_dict.values(), key=lambda e: (e['parsed_time'] or datetime.min, e['number']))
+    # Build all_event_times from ALL regatta events (including non-targeted heats)
+    # so that hot-seat color calculation accounts for heat times even if heat columns aren't shown
+    all_event_times = {}
+    for event in regatta_events_list:
+        pt = parse_time_for_sort(event.event_time)
+        if pt is not None:
+            all_event_times[event.event_number] = pt
+    all_event_times = assign_synthetic_times(all_event_times)
+    # Also include times from events_dict (entries without matching regatta events)
+    for evt_num, evt_info in events_dict.items():
+        if evt_num not in all_event_times and evt_info.get('parsed_time'):
+            all_event_times[evt_num] = evt_info['parsed_time']
 
     # 4. Calculate hot seating colors for each athlete
     def get_minutes_between(time1, time2):
@@ -5311,8 +5319,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
     for athlete in all_athletes:
         events_for_athlete = []
         for event_num, entries in athlete_events[athlete].items():
-            event_info = events_dict.get(event_num, {})
-            events_for_athlete.append((event_num, event_info.get('parsed_time')))
+            events_for_athlete.append((event_num, all_event_times.get(event_num)))
 
         # Sort by time
         events_for_athlete.sort(key=lambda x: x[1] or datetime.min)
@@ -5339,8 +5346,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
     for boat in all_boats_used:
         events_for_boat = []
         for event_num, entries in boat_events[boat].items():
-            event_info = events_dict.get(event_num, {})
-            events_for_boat.append((event_num, event_info.get('parsed_time')))
+            events_for_boat.append((event_num, all_event_times.get(event_num)))
 
         # Sort by time
         events_for_boat.sort(key=lambda x: x[1] or datetime.min)
