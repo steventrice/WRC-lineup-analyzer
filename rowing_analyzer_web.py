@@ -5938,11 +5938,7 @@ def render_dashboard(selected_regatta: str, roster_manager, format_event_time_fu
         header_class = "event-header" if has_entries else "event-header no-entries-header"
         stage_html = f'<div class="event-stage" style="font-size:0.7em;color:#888;font-style:italic;">{stage}</div>' if stage else ''
         # Create tooltip with full name
-        html += f'''<th class="{header_class}" title="{event_name}{(' - ' + stage) if stage else ''}">
-            <div class="event-time">{time_display}</div>
-            <div class="event-name">{event_name}</div>
-            {stage_html}
-        </th>'''
+        html += f'<th class="{header_class}" title="{event_name}{(" - " + stage) if stage else ""}"><div class="event-time">{time_display}</div><div class="event-name">{event_name}</div>{stage_html}</th>'
 
     html += "</tr></thead><tbody>"
 
